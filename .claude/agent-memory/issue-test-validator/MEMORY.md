@@ -1,0 +1,2 @@
+- [Project Issue Tracker State](project-issue-tracker-state.md) — current counts (26 Resolved, 1 Investigating), test baseline 276 pass/8 skip, full history
+- [Testing Patterns](feedback-testing-patterns.md) — effective mocking/assertion patterns for portfolio, engine, dashboard layers

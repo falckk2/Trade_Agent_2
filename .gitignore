@@ -1,0 +1,33 @@
+# Secrets & credentials
+.env
+.claude/settings.local.json
+
+# Python
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.xml
+
+# Runtime data
+data/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/

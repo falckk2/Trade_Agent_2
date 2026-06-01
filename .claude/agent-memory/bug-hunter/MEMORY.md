@@ -1,0 +1,6 @@
+- [Issue IDs Used](issue-ids.md) — Tracks last-assigned ISSUE-NNN so new entries don't collide
+- [Diagnostic Logging Locations](diagnostic-logging-locations.md) — All BUG-HUNTER markers cleaned up as of 2026-05-16 verification
+- [BloFin SDK v0.5.0 Quirks](blofin-sdk-quirks.md) — Method coverage, field names, undocumented behavior verified against installed SDK
+- [Architectural Weak Spots](architectural-weak-spots.md) — Files/areas of repeated bug findings in this codebase
+- [Verification 2026-05-16](verification-2026-05-16.md) — Mode B pass: 22 fixes confirmed, 0 failed; baseline for next audit
+- [Verification 2026-06-01](verification-2026-06-01.md) — Mode B pass: ISSUE-012/014/017/022 confirmed Resolved, 0 reverted; 276 pass/8 skip

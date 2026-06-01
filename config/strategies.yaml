@@ -1,0 +1,43 @@
+strategies:
+  - name: sma_crossover_btc
+    type: sma_crossover
+    weight: 1.0
+    params:
+      fast_period: 10
+      slow_period: 30
+    symbols:
+      - "BTC-USDT"
+
+  - name: rsi_btc
+    type: rsi
+    weight: 1.0
+    params:
+      period: 14
+      overbought: 70
+      oversold: 30
+    symbols:
+      - "BTC-USDT"
+
+  - name: sma_crossover_eth
+    type: sma_crossover
+    weight: 1.0
+    params:
+      fast_period: 10
+      slow_period: 30
+    symbols:
+      - "ETH-USDT"
+
+  - name: rsi_eth
+    type: rsi
+    weight: 1.0
+    params:
+      period: 14
+      overbought: 70
+      oversold: 30
+    symbols:
+      - "ETH-USDT"
+
+  # ping_pong_test removed — this is a test-only strategy that issues
+  # alternating market orders every 10 s with no market analysis.
+  # To re-enable for pipeline testing, set ENABLE_TEST_STRATEGIES=1 in .env
+  # and add back this entry manually.

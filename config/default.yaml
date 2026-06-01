@@ -1,0 +1,31 @@
+exchange:
+  name: blofin
+  demo_mode: true
+  symbols:
+    - "BTC-USDT"
+    - "ETH-USDT"
+
+risk:
+  max_position_pct: 0.05
+  max_exposure_pct: 0.20
+  max_drawdown_pct: 0.10
+  default_stop_loss_pct: 0.02
+  default_take_profit_pct: 0.04
+  # Reject signals weaker than this threshold (0.0–1.0).
+  # SMA crossover signals typically produce strengths < 0.05 so the code
+  # default of 0.3 would filter almost everything — keep at 0.05 for SMA
+  # strategies and raise only when using strategies with stronger signals.
+  min_signal_strength: 0.05
+
+engine:
+  timeframe: "5m"
+  candle_limit: 200
+  interval_seconds: 5
+
+dashboard:
+  host: "127.0.0.1"
+  port: 8050
+  refresh_interval_ms: 2000
+
+data:
+  data_dir: "data"
