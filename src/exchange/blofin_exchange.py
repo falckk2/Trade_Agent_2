@@ -265,6 +265,7 @@ class BloFinExchange(IExchange):
             status=_parse_order_status(item.get("state", "live")),
             filled_quantity=float(item.get("filledSize", item.get("accFillSz", 0))),
             average_fill_price=float(item["averagePrice"]) if item.get("averagePrice") else None,
+            fee=abs(float(item.get("fee") or 0)),
             created_at=_ts_to_datetime(item.get("createTime", 0)),
         )
 

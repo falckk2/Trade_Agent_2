@@ -40,6 +40,12 @@ class PortfolioManager(IPortfolioManager):
         self._pending_fill_prices: dict[tuple[str, Side], collections.deque[float]] = (
             collections.defaultdict(collections.deque)
         )
+        # Parallel fee cache — same keying as _pending_fill_prices.
+        # Stores the exchange fee for each fill so _record_trade can deduct
+        # both entry and exit fees from the net P&L.
+        self._pending_fees: dict[tuple[str, Side], collections.deque[float]] = (
+            collections.defaultdict(collections.deque)
+        )
 
         # Tracks the cumulative realized_pnl already recorded for each position.
         # Used to compute the *incremental* realized PnL on each flip so that
@@ -153,13 +159,14 @@ class PortfolioManager(IPortfolioManager):
                 writer = csv.writer(f)
                 writer.writerow([
                     "id", "symbol", "side", "entry_price", "exit_price",
-                    "quantity", "pnl", "strategy_name", "opened_at",
+                    "quantity", "pnl", "fee", "strategy_name", "opened_at",
                     "closed_at", "duration_seconds",
                 ])
                 for t in trades_snapshot:
                     writer.writerow([
                         t.id, t.symbol, t.side.value, t.entry_price,
-                        t.exit_price, t.quantity, t.pnl, t.strategy_name or "",
+                        t.exit_price, t.quantity, t.pnl, t.fee,
+                        t.strategy_name or "",
                         t.opened_at.isoformat(), t.closed_at.isoformat(),
                         t.duration_seconds,
                     ])
@@ -194,6 +201,7 @@ class PortfolioManager(IPortfolioManager):
                             exit_price=float(row["exit_price"]),
                             quantity=float(row["quantity"]),
                             pnl=float(row["pnl"]),
+                            fee=float(row.get("fee") or 0),
                             strategy_name=row["strategy_name"],
                             opened_at=datetime.fromisoformat(row["opened_at"]),
                             closed_at=datetime.fromisoformat(row["closed_at"]),
@@ -236,16 +244,17 @@ class PortfolioManager(IPortfolioManager):
         order = event.payload.get("order")
         if order and order.average_fill_price is not None:
             with self._lock:
-                self._pending_fill_prices[(order.symbol, order.side)].append(
-                    order.average_fill_price
-                )
+                key = (order.symbol, order.side)
+                self._pending_fill_prices[key].append(order.average_fill_price)
+                self._pending_fees[key].append(order.fee)
                 logger.debug(
-                    "_on_order_filled queued price %.4f for key=(%s, %s) "
+                    "_on_order_filled queued price=%.4f fee=%.6f for key=(%s, %s) "
                     "(queue depth=%d)",
                     order.average_fill_price,
+                    order.fee,
                     order.symbol,
                     order.side.value,
-                    len(self._pending_fill_prices[(order.symbol, order.side)]),
+                    len(self._pending_fill_prices[key]),
                 )
 
     def _record_trade(
@@ -307,15 +316,35 @@ class PortfolioManager(IPortfolioManager):
         # concurrent fills on the same symbol/side are consumed in order rather
         # than silently overwriting each other.
         close_side = Side.SELL if position.side == Side.BUY else Side.BUY
-        key = (position.symbol, close_side)
-        queue = self._pending_fill_prices.get(key)
-        if queue:
-            exit_price = queue.popleft()
-            # Remove empty deques to keep the dict tidy
-            if not queue:
-                del self._pending_fill_prices[key]
+        close_key = (position.symbol, close_side)
+        open_key = (position.symbol, position.side)
+
+        price_queue = self._pending_fill_prices.get(close_key)
+        if price_queue:
+            exit_price = price_queue.popleft()
+            if not price_queue:
+                del self._pending_fill_prices[close_key]
         else:
             exit_price = position.current_price
+
+        # Deduct exchange fees from net P&L (entry fee + exit fee).
+        # Fees are cached on ORDER_FILLED events — if unavailable default to 0.
+        exit_fee = 0.0
+        fee_queue = self._pending_fees.get(close_key)
+        if fee_queue:
+            exit_fee = fee_queue.popleft()
+            if not fee_queue:
+                del self._pending_fees[close_key]
+
+        entry_fee = 0.0
+        fee_queue = self._pending_fees.get(open_key)
+        if fee_queue:
+            entry_fee = fee_queue.popleft()
+            if not fee_queue:
+                del self._pending_fees[open_key]
+
+        total_fee = entry_fee + exit_fee
+        net_pnl = pnl - total_fee
 
         trade = TradeRecord(
             id=position.id,
@@ -324,17 +353,21 @@ class PortfolioManager(IPortfolioManager):
             entry_price=position.entry_price,
             exit_price=exit_price,
             quantity=position.quantity,
-            pnl=pnl,
+            pnl=net_pnl,
             strategy_name=strategy_name,
             opened_at=position.opened_at,
             closed_at=now,
             duration_seconds=duration,
+            fee=total_fee,
         )
         self._trade_history.append(trade)
         self._strategy_realized_pnl[strategy_name] = (
-            self._strategy_realized_pnl.get(strategy_name, 0.0) + pnl
+            self._strategy_realized_pnl.get(strategy_name, 0.0) + net_pnl
         )
-        logger.info("Trade closed: %s %s PnL=%.4f", position.symbol, position.side.value, pnl)
+        logger.info(
+            "Trade closed: %s %s gross_pnl=%.4f fee=%.6f net_pnl=%.4f",
+            position.symbol, position.side.value, pnl, total_fee, net_pnl,
+        )
 
     def _build_snapshot(self) -> PortfolioSnapshot:
         total_equity = self._balance.get("total_equity", 0.0)

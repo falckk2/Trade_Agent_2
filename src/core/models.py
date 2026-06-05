@@ -56,6 +56,7 @@ class Order:
     filled_quantity: float = 0.0
     filled_at: datetime | None = None
     average_fill_price: float | None = None
+    fee: float = 0.0
 
 
 @dataclass
@@ -82,11 +83,12 @@ class TradeRecord:
     entry_price: float
     exit_price: float
     quantity: float
-    pnl: float
+    pnl: float       # net of fees
     strategy_name: str
     opened_at: datetime
     closed_at: datetime
     duration_seconds: float = 0.0
+    fee: float = 0.0  # total fee for this trade (entry + exit)
 
 
 @dataclass(frozen=True)
