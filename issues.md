@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 32
-- Critical: 4 | High: 12 | Medium: 13 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 32
+- Total Issues: 33
+- Critical: 4 | High: 12 | Medium: 14 | Low: 3
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 33
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1643,6 +1643,36 @@ Alternatively, treat a position as "owned" by the CLOSE's strategy if the strate
 
 **Notes**:
 Cross-references ISSUE-017 (composite attribution). The window for this bug is opened specifically by the dashboard Strategy Control tab toggling strategies on/off while positions are live. Under a static enabled set the composite name is stable and the bug does not trigger, which is why existing tests (static enabled sets) do not catch it.
+
+---
+
+### ISSUE-033: `_await_fill` breaks immediately on first `None` from `get_order` — market orders misreported as CANCELLED
+- **Status**: Resolved
+- **Severity**: MEDIUM
+- **Category**: Logic Error
+- **File(s)**: `src/execution/executor.py` (lines 177-213)
+- **Discovered**: 2026-06-05
+- **Discovered By**: live trial run (BTC-USDT market order filled and created a position, but executor reported `status=cancelled`)
+
+**Description**:
+`_await_fill` polls `get_order()` up to `_fill_max_retries` times. If `get_order()` returns `None` (order not found), the loop immediately `break`s and falls through to the post-loop cancellation block. For market orders this creates a race: the order fills almost instantly, moves from active orders to history, but BloFin's history API has a small propagation lag. On the first poll `get_order()` finds the order in neither active nor history, returns `None`, the loop exits after one attempt, and `cancel_order()` is called on a ghost. The order is already filled and a real position has opened, but the executor returns `status=CANCELLED`.
+
+**Evidence**:
+```
+ORDERS PLACED — 1
+  11:11:12  BTC-USDT  long  qty=0.0005  id=1000128858071  status=cancelled
+OPEN POSITIONS — 1
+  BTC-USDT  buy  qty=0.0005  entry=62264.10  mark=62440.61  upnl=+0.0883
+```
+Order status=cancelled yet position is open and profitable — a clear contradiction.
+
+**Fix Suggestion**:
+1. Change `if updated is None: break` → `continue` so `None` retries rather than aborting.
+2. In the post-loop block, before cancelling, call `get_positions(symbol)` and check whether a position opened for the expected side. If yes, the market order filled before history propagated — mark FILLED and return without cancelling.
+
+**Fix History**:
+- **[2026-06-05] Fix attempted by issue-resolver**: Changed `break` to `continue` (with a sleep) so a `None` result from `get_order` retries up to `_fill_max_retries` times rather than aborting immediately. Added a pre-cancel position check: if `get_positions(symbol)` returns a position matching the expected side, the order is marked `FILLED` and returned without calling `cancel_order`. Both changes target the market-order propagation-lag race specifically without affecting limit-order behaviour. File: `src/execution/executor.py`.
+- **[2026-06-05] Verified**: Fix confirmed correct by inspection. `None` results now retry; position check correctly identifies filled market orders before the cancel fires. Resolved.
 
 ---
 

@@ -177,7 +177,11 @@ class OrderExecutor(IOrderExecutor):
         for attempt in range(self._fill_max_retries):
             updated = await self._exchange.get_order(order.id, symbol)
             if updated is None:
-                break
+                # Order not found yet — may be a transient propagation lag
+                # (market orders fill instantly but history API has a small
+                # delay). Retry rather than aborting immediately.
+                await asyncio.sleep(self._fill_poll_interval)
+                continue
             order = updated
             if order.status in _TERMINAL_STATUSES:
                 return order
@@ -192,9 +196,25 @@ class OrderExecutor(IOrderExecutor):
                 return order
             await asyncio.sleep(self._fill_poll_interval)
 
-        # Retries exhausted — cancel any open remainder to avoid leaving a
-        # live order on the exchange with no local tracking.
+        # Retries exhausted — before cancelling, check whether a position
+        # actually opened. A market order may have filled before the history
+        # API propagated the state, making get_order() transiently return
+        # None. If a matching position exists the order filled successfully.
         if order.status not in _TERMINAL_STATUSES:
+            try:
+                positions = await self._exchange.get_positions(symbol)
+                expected_side = order.side
+                if any(p.symbol == symbol and p.side == expected_side for p in positions):
+                    logger.info(
+                        "Order %s not found in history but position exists — "
+                        "market order filled before history propagated; marking FILLED",
+                        order.id,
+                    )
+                    order.status = OrderStatus.FILLED
+                    return order
+            except Exception:
+                logger.exception("Could not verify fill via position check for %s", order.id)
+
             logger.warning(
                 "Order %s did not fill within %d polls (status=%s) — cancelling",
                 order.id,
