@@ -210,6 +210,15 @@ class OrderExecutor(IOrderExecutor):
                         "market order filled before history propagated; marking FILLED",
                         order.id,
                     )
+                    # One final history lookup now that the position confirms a
+                    # fill — by this point propagation lag should be resolved
+                    # and we can retrieve the actual fill price.
+                    try:
+                        filled = await self._exchange.get_order(order.id, symbol)
+                        if filled is not None:
+                            order = filled
+                    except Exception:
+                        logger.debug("Could not fetch fill details for %s", order.id)
                     order.status = OrderStatus.FILLED
                     return order
             except Exception:

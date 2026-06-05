@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 34
-- Critical: 4 | High: 12 | Medium: 14 | Low: 4
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 34
+- Total Issues: 35
+- Critical: 4 | High: 12 | Medium: 15 | Low: 4
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 35
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1721,5 +1721,32 @@ Persist `_initial_equity` to `data/initial_equity.json`. Load on startup; only s
 **Fix History**:
 - **[2026-06-05] Fix attempted by issue-resolver**: Added `baseline_file: Path | None` parameter to `RiskManager.__init__`. `_load_baseline()` reads `initial_equity.json` at construction; `_save_baseline()` writes it when `set_initial_equity()` sets a new value. `set_initial_equity()` is now a no-op if a persisted baseline already exists (prevents restart from overwriting prior baseline). Wired `baseline_file=data_dir / "initial_equity.json"` in `main.py`'s `build_components()`. Files: `src/risk/manager.py`, `main.py`.
 - **[2026-06-05] Verified**: Persistence logic confirmed correct by inspection. Resolved.
+
+---
+
+### ISSUE-035: `_parse_order` uses wrong BloFin field names — `avgPx`/`accFillSz` instead of `averagePrice`/`filledSize`
+- **Status**: Resolved
+- **Severity**: MEDIUM
+- **Category**: API Misuse
+- **File(s)**: `src/exchange/blofin_exchange.py` (line 266-267)
+- **Discovered**: 2026-06-05
+- **Discovered By**: live trial run (`fill_price=None` on every filled order despite real fill prices on exchange)
+
+**Description**:
+`_parse_order` builds an `Order` dataclass from a raw BloFin SDK response. Two fields were using the wrong key names against the actual BloFin REST API response:
+- `item.get("accFillSz", 0)` → actual field is `filledSize`
+- `item.get("avgPx")` → actual field is `averagePrice`
+
+Both fields are present in the `get_order_history` response (verified against live BloFin demo API). As a result, `order.filled_quantity` was always `0` and `order.average_fill_price` was always `None`. The `_pending_fill_prices` cache was never populated, so `_record_trade` fell back to `position.current_price` instead of the actual fill price for all trade records.
+
+**Evidence**:
+```
+[FILLED] id=1000128889922 qty=2.6000 fill_price=None status=filled
+```
+Live API response confirmed: `averagePrice: '1584.12'`, `filledSize: '6.400000000000000000'`.
+
+**Fix History**:
+- **[2026-06-05] Fix attempted by issue-resolver**: Changed `accFillSz` → `filledSize` (with `accFillSz` as fallback for backward compatibility) and `avgPx` → `averagePrice` in `_parse_order`. Updated mock data in `tests/test_issue_001_get_order_two_phase_lookup.py` to use real field names. Also added a final `get_order` attempt in the ISSUE-033 position-check fallback path so the fill price is retrieved even when the position check is the one that detects the fill. Files: `src/exchange/blofin_exchange.py`, `src/execution/executor.py`, `tests/test_issue_001_get_order_two_phase_lookup.py`.
+- **[2026-06-05] Verified**: Fix confirmed. 308 tests pass. Resolved.
 
 ---

@@ -263,8 +263,8 @@ class BloFinExchange(IExchange):
             quantity=float(item.get("size", 0)),
             price=float(item["price"]) if item.get("price") else None,
             status=_parse_order_status(item.get("state", "live")),
-            filled_quantity=float(item.get("accFillSz", 0)),
-            average_fill_price=float(item["avgPx"]) if item.get("avgPx") else None,
+            filled_quantity=float(item.get("filledSize", item.get("accFillSz", 0))),
+            average_fill_price=float(item["averagePrice"]) if item.get("averagePrice") else None,
             created_at=_ts_to_datetime(item.get("createTime", 0)),
         )
 

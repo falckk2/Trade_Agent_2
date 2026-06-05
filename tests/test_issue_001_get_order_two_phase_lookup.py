@@ -45,7 +45,7 @@ _ACTIVE_ORDER_ITEM = {
     "orderType": "market",
     "size": "0.1",
     "state": "live",
-    "accFillSz": "0",
+    "filledSize": "0",
 }
 
 _HISTORY_ORDER_ITEM = {
@@ -55,8 +55,8 @@ _HISTORY_ORDER_ITEM = {
     "orderType": "market",
     "size": "0.2",
     "state": "filled",
-    "accFillSz": "0.2",
-    "avgPx": "51000.0",
+    "filledSize": "0.2",
+    "averagePrice": "51000.0",
 }
 
 
