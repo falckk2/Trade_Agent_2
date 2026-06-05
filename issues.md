@@ -1,11 +1,11 @@
 # Issues Register
 
-_Last updated: 2026-06-01_
+_Last updated: 2026-06-06_
 
 ## Summary
-- Total Issues: 39
-- Critical: 4 | High: 12 | Medium: 16 | Low: 7
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 39
+- Total Issues: 43
+- Critical: 4 | High: 12 | Medium: 17 | Low: 10
+- Open: 4 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 39
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1819,5 +1819,88 @@ BloFin's `filledSize` field is in contracts. `_parse_order` stored it directly a
 **Fix History**:
 - **[2026-06-06] Fix attempted by issue-resolver**: Multiply `filledSize` by `contract_value` from `_instrument_specs` (defaulting to 1.0 if the instrument isn't loaded yet) to convert contracts → base units. File: `src/exchange/blofin_exchange.py`.
 - **[2026-06-06] Verified**: 308 tests pass. Resolved.
+
+---
+
+### ISSUE-040: `_parse_order` leaves `Order.quantity` in contracts — inconsistent with `filled_quantity` fix
+- **Status**: Open
+- **Severity**: LOW
+- **Category**: Logic Error
+- **File(s)**: `src/exchange/blofin_exchange.py` (`_parse_order`)
+- **Discovered**: 2026-06-06
+- **Discovered By**: code review following ISSUE-039 fix
+
+**Description**:
+ISSUE-039 converted `filled_quantity` from contracts to base units by multiplying by `contract_value`. However `quantity=float(item.get("size", 0))` was left unconverted — `size` in BloFin order history is also in contracts. An `Order` returned from `get_order()` now has `quantity` in contracts and `filled_quantity` in base units. The partial-fill warning in `close_position` compares `order.quantity` and `order.filled_quantity`, which are now in different units. No computational damage to P&L (trade recording uses `position.quantity`), but the warning log would print a nonsensical ratio.
+
+**Fix Suggestion**:
+Apply the same `* contract_value` conversion to `quantity` in `_parse_order`, consistent with the `filled_quantity` fix.
+
+---
+
+### ISSUE-041: Dashboard trade history table does not display the `fee` column
+- **Status**: Open
+- **Severity**: LOW
+- **Category**: Configuration Error
+- **File(s)**: `src/dashboard/callbacks.py`, `src/dashboard/components.py` (or equivalent table builder)
+- **Discovered**: 2026-06-06
+- **Discovered By**: code review after ISSUE-036 added `fee` to `TradeRecord`
+
+**Description**:
+`TradeRecord` now carries a `fee` field and `trade_history.csv` includes a `fee` column, but the dashboard's trade history table was not updated to display it. Users viewing the dashboard see `pnl` (net of fees) with no visibility into how much was paid in fees per trade.
+
+**Fix Suggestion**:
+Add `fee` column to the trade history table component. Also consider adding a cumulative-fees metric card to the portfolio overview.
+
+---
+
+### ISSUE-042: No targeted pytest tests for ISSUE-032 through ISSUE-039
+- **Status**: Open
+- **Severity**: MEDIUM
+- **Category**: Test Coverage
+- **File(s)**: `tests/` (missing test files)
+- **Discovered**: 2026-06-06
+- **Discovered By**: pipeline audit — issue-test-validator has not run since ISSUE-031
+
+**Description**:
+Eight issues were fixed and verified by code review and live trials but have no dedicated pytest test files:
+- ISSUE-032: `close_all_positions()` shutdown cleanup
+- ISSUE-033: `_await_fill` `None`-result retry + position-check fallback
+- ISSUE-034: Drawdown baseline persistence to `initial_equity.json`
+- ISSUE-035: `averagePrice`/`filledSize` field name fixes in `_parse_order`
+- ISSUE-036: Fee tracking in `Order`, `TradeRecord`, and `_record_trade`
+- ISSUE-037: Shutdown positions recorded as trades via `update([], balance)`
+- ISSUE-038: Market order `price='0'` → `None` fix
+- ISSUE-039: `filled_quantity` contracts-to-base-units conversion
+
+Without test coverage these fixes are only verified by manual live trials, making future regressions hard to catch automatically.
+
+**Fix Suggestion**:
+Run the issue-test-validator agent targeting ISSUE-032 through ISSUE-039. Write unit tests for each using mocks where live API access is not needed.
+
+---
+
+### ISSUE-043: WebSocket uses unauthenticated public channel — server idles out every ~30s
+- **Status**: Open
+- **Severity**: LOW
+- **Category**: Bug
+- **File(s)**: `src/exchange/blofin_websocket.py`
+- **Discovered**: 2026-06-06
+- **Discovered By**: live trial logs (5 reconnects per 10 minutes in every trial run despite ISSUE-028 ping fix)
+
+**Description**:
+`BloFinWebSocket` subscribes to the public candle channel (`wss://demo-trading-openapi.blofin.com/ws/public`). BloFin's public WebSocket server closes idle unauthenticated connections after ~30 seconds regardless of ping activity. The ISSUE-028 fix (JSON ping format) prevents the server from immediately rejecting the ping, but the public channel still disconnects periodically. Each reconnect causes a brief gap in real-time candle delivery and floods the log with WARNING messages.
+
+The proper fix is to authenticate the WebSocket connection (send a login message after connect) and/or subscribe via the private channel, which has a longer or no idle timeout.
+
+**Fix Suggestion**:
+After connecting, send a BloFin login message:
+```python
+await self._ws.send_json({
+    "op": "login",
+    "args": [{"apiKey": api_key, "passphrase": passphrase, "timestamp": ts, "sign": sign}]
+})
+```
+This requires passing credentials into `BloFinWebSocket` and computing the HMAC signature per BloFin's WS auth spec. Alternatively, investigate whether the public channel respects ping keepalives at shorter intervals (e.g., every 20s instead of 30s).
 
 ---
