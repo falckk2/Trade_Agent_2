@@ -253,17 +253,29 @@ class BloFinExchange(IExchange):
 
     def _parse_order(self, item: dict) -> Order:
         """Build an Order dataclass from a raw SDK order dict."""
+        inst_id = item.get("instId", "")
+        contract_value = self._instrument_specs.get(inst_id, {}).get("contract_value", 1.0)
+
+        # BloFin returns filledSize in contracts; convert to base units for
+        # consistency with Order.quantity (which callers compute in base units).
+        filled_contracts = float(item.get("filledSize", item.get("accFillSz", 0)))
+        filled_base = filled_contracts * contract_value
+
+        # Market orders carry price='0'; treat that as no limit price (None).
+        raw_price = item.get("price")
+        limit_price = float(raw_price) if raw_price and raw_price != "0" else None
+
         return Order(
             id=item.get("orderId", ""),
-            symbol=item.get("instId", ""),
+            symbol=inst_id,
             side=Side.BUY if item.get("side") == "buy" else Side.SELL,
             order_type=OrderType.LIMIT
             if item.get("orderType") == "limit"
             else OrderType.MARKET,
             quantity=float(item.get("size", 0)),
-            price=float(item["price"]) if item.get("price") else None,
+            price=limit_price,
             status=_parse_order_status(item.get("state", "live")),
-            filled_quantity=float(item.get("filledSize", item.get("accFillSz", 0))),
+            filled_quantity=filled_base,
             average_fill_price=float(item["averagePrice"]) if item.get("averagePrice") else None,
             fee=abs(float(item.get("fee") or 0)),
             created_at=_ts_to_datetime(item.get("createTime", 0)),

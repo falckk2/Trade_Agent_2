@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 37
-- Critical: 4 | High: 12 | Medium: 16 | Low: 5
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 37
+- Total Issues: 39
+- Critical: 4 | High: 12 | Medium: 16 | Low: 7
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 39
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1785,5 +1785,39 @@ Multiple trials showed "Loaded N trades / Saved N trades" — same count despite
 **Fix History**:
 - **[2026-06-06] Fix attempted by issue-resolver**: After closing all positions in `close_all_positions()`, fetch the current balance and call `portfolio_manager.update([], balance)`. The empty position list causes every entry in `_prev_positions` to be detected as closed, triggering `_record_trade` with the already-cached fill prices and fees. This runs before `save_trade_history()` in `stop()`, so the shutdown trades are included in the saved CSV. Balance fetch failure falls back to last snapshot equity. File: `src/engine/trading_engine.py`.
 - **[2026-06-06] Verified**: Logic confirmed correct by inspection. Resolved.
+
+---
+
+### ISSUE-038: `_parse_order` sets `price=0.0` for market orders instead of `None`
+- **Status**: Resolved
+- **Severity**: LOW
+- **Category**: API Misuse
+- **File(s)**: `src/exchange/blofin_exchange.py` (`_parse_order`)
+- **Discovered**: 2026-06-06
+- **Discovered By**: code review of `_parse_order` field parsing
+
+**Description**:
+BloFin returns `price: '0'` for market orders (no limit price). `_parse_order` used `float(item["price"]) if item.get("price") else None`. The string `'0'` is truthy, so `order.price = 0.0` instead of `None`. No current code path reads `order.price` for market orders, so there is no functional impact — but the value is semantically wrong and would mislead future code that checks `order.price is None` to distinguish market from limit orders.
+
+**Fix History**:
+- **[2026-06-06] Fix attempted by issue-resolver**: Changed price parsing to `float(raw_price) if raw_price and raw_price != "0" else None` so market orders correctly carry `price=None`. File: `src/exchange/blofin_exchange.py`.
+- **[2026-06-06] Verified**: 308 tests pass. Resolved.
+
+---
+
+### ISSUE-039: `_parse_order` returns `filled_quantity` in contracts, not base units
+- **Status**: Resolved
+- **Severity**: LOW
+- **Category**: Logic Error
+- **File(s)**: `src/exchange/blofin_exchange.py` (`_parse_order`)
+- **Discovered**: 2026-06-06
+- **Discovered By**: live trial analysis (`[FILLED] qty=2.0000` vs `[ORDER] qty=0.0026` for same BTC position)
+
+**Description**:
+BloFin's `filledSize` field is in contracts. `_parse_order` stored it directly as `Order.filled_quantity` without converting to base units. All other quantity values in the codebase (position quantity, order quantity passed to `execute_signal`) are in base units. The discrepancy produced misleading log messages in partial-fill warnings and "Order filled" logs. No computational damage since `_record_trade` uses `position.quantity` (base units from `get_positions`), not `order.filled_quantity`.
+
+**Fix History**:
+- **[2026-06-06] Fix attempted by issue-resolver**: Multiply `filledSize` by `contract_value` from `_instrument_specs` (defaulting to 1.0 if the instrument isn't loaded yet) to convert contracts → base units. File: `src/exchange/blofin_exchange.py`.
+- **[2026-06-06] Verified**: 308 tests pass. Resolved.
 
 ---
