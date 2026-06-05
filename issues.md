@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 31
-- Critical: 4 | High: 11 | Medium: 13 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 31
+- Total Issues: 32
+- Critical: 4 | High: 12 | Medium: 13 | Low: 3
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 32
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1643,5 +1643,33 @@ Alternatively, treat a position as "owned" by the CLOSE's strategy if the strate
 
 **Notes**:
 Cross-references ISSUE-017 (composite attribution). The window for this bug is opened specifically by the dashboard Strategy Control tab toggling strategies on/off while positions are live. Under a static enabled set the composite name is stable and the bug does not trigger, which is why existing tests (static enabled sets) do not catch it.
+
+---
+
+### ISSUE-032: `TradingEngine.stop()` does not close open positions — positions left unmonitored after shutdown
+- **Status**: Resolved
+- **Severity**: HIGH
+- **Category**: Logic Error
+- **File(s)**: `src/engine/trading_engine.py` (lines 156-161), `main.py`
+- **Discovered**: 2026-06-05
+- **Discovered By**: live demo run (ETH-USDT SHORT position remained open on exchange after 15-minute trial ended)
+
+**Description**:
+`TradingEngine.stop()` sets `_running = False`, disconnects the exchange, and saves trade history — but it does not close any open positions on the exchange. When the engine shuts down (SIGINT, SIGTERM, auto-stop, or crash), any open positions remain live on the exchange indefinitely with no monitoring. The operator has no automated safety net and must manually identify and close positions.
+
+This is particularly dangerous for:
+- Trial/demo runs that auto-stop after a fixed duration
+- Unclean shutdowns (SIGKILL, power loss, OOM)
+- Any restart scenario where the new instance does not inherit the prior position state
+
+**Evidence**:
+After a 15-minute demo run, the engine stopped cleanly but an ETH-USDT SHORT (qty=0.026, entry=1673.16) remained open and unmonitored on the BloFin demo account. The position had to be closed manually.
+
+**Fix Suggestion**:
+Add a `close_all_positions()` method to `TradingEngine` that fetches all open positions from the exchange and calls `OrderExecutor.close_position()` for each. Call it inside `stop()` before `disconnect()`.
+
+**Fix History**:
+- **[2026-06-05] Fix attempted by issue-resolver**: Added `close_all_positions()` async method to `TradingEngine`. Modified `stop(close_positions: bool = True)` to call `close_all_positions()` before `disconnect()`. Failures on individual position closes are logged as exceptions (not raised) so a single failed close does not prevent the remaining positions from being attempted or the engine from completing its shutdown. The `close_positions=False` flag is available for callers that intentionally want to preserve positions across a restart. File: `src/engine/trading_engine.py`.
+- **[2026-06-05] Verified**: `stop()` now calls `close_all_positions()` which fetches positions via `get_positions()` and calls `close_position()` for each. Exceptions are caught per-position so a single failure is logged without aborting the shutdown sequence. The `close_positions` flag defaults to `True`. Resolved.
 
 ---

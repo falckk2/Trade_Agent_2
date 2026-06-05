@@ -153,12 +153,39 @@ class TradingEngine:
                 logger.exception("Error in trading tick")
             await asyncio.sleep(interval_seconds)
 
-    async def stop(self) -> None:
+    async def stop(self, close_positions: bool = True) -> None:
         logger.info("Trading engine stopping...")
         self._running = False
+        if close_positions:
+            await self.close_all_positions()
         await self._exchange.disconnect()
         self._portfolio_manager.save_trade_history()
         logger.info("Trading engine stopped")
+
+    async def close_all_positions(self) -> None:
+        """Market-close every open position. Called on shutdown so no positions
+        are left unmonitored after the engine exits."""
+        try:
+            positions = await self._exchange.get_positions()
+        except Exception:
+            logger.exception("Could not fetch positions for shutdown close")
+            return
+        if not positions:
+            logger.info("No open positions to close on shutdown")
+            return
+        logger.info("Closing %d open position(s) before shutdown", len(positions))
+        for position in positions:
+            try:
+                await self._order_executor.close_position(position)
+                logger.info(
+                    "Closed %s %s qty=%.4f on shutdown",
+                    position.symbol, position.side.value, position.quantity,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to close %s %s on shutdown — manual close required",
+                    position.symbol, position.side.value,
+                )
 
     @property
     def is_running(self) -> bool:
