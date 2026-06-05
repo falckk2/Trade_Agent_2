@@ -1,16 +1,34 @@
 ---
 name: resolved-issues-2026-06-01
-description: Issue assessment pass on 2026-06-01 — fixes for ISSUE-014, 017, 022 confirmed already in codebase; ISSUE-012 cost accepted; ISSUE-019 blocked on live API
+description: Issue assessment and fix pass on 2026-06-01 — ISSUE-014/017/022 confirmed in codebase; ISSUE-029/030/031 fixed by this resolver pass
 metadata:
   type: project
 ---
 
 # Issue Assessment Pass — 2026-06-01
 
-## Key Finding
+## Key Finding (First Pass)
 ISSUE-014, ISSUE-017, and ISSUE-022 all had their code-side fixes already implemented in the codebase (at some point after the 2026-05-17 test-validator pass). The issues.md had not been updated to reflect this. No new code changes were needed for these three issues.
 
-## Issues Assessed
+## New Fixes Applied (Second Pass — ISSUE-029, 030, 031)
+
+### ISSUE-029 (MEDIUM) — Flip records stale realized PnL
+- **Root cause**: `_record_trade(prev)` used `prev.realized_pnl` which is one tick stale. The flip's realized delta lands on `pos.realized_pnl` (current tick).
+- **Fix**: Added `realized_pnl_override` and `override_unrealized_pnl` optional parameters to `_record_trade`. In `update()` flip branch, now calls `_record_trade(prev, realized_pnl_override=pos.realized_pnl, override_unrealized_pnl=0.0)`.
+- **Watermark**: Set to `realized_now` (= `pos.realized_pnl`) so the next event for this position ID starts from the correct baseline.
+- **File**: `src/portfolio/manager.py` lines 84-92, 251-302
+
+### ISSUE-030 (LOW) — `None` assigned to str-typed `strategy_name`
+- **Root cause**: `symbol_attribution.get(pos.symbol)` returns `None` for uncovered symbols; assigned to `Position.strategy_name` which is declared `str = ""`.
+- **Fix**: Single-line change: `symbol_attribution.get(pos.symbol) or ""`.
+- **File**: `src/engine/trading_engine.py` line 381
+
+### ISSUE-031 (LOW) — CLOSE signal can't close stale-tagged positions
+- **Root cause**: CLOSE handler matched `position.strategy_name == strategy.name`. After a UI toggle, a position tagged `composite[sma,rsi]` never equals the current single-strategy name `rsi_btc`.
+- **Fix**: Removed the strategy_name equality check. Now only matches `position.symbol == symbol` — correct for BloFin net mode (one position per symbol).
+- **File**: `src/engine/trading_engine.py` lines 303-307
+
+## Issues Assessed (First Pass)
 
 | Issue | Severity | Status → | Action |
 |-------|----------|----------|--------|
@@ -37,8 +55,9 @@ ISSUE-014, ISSUE-017, and ISSUE-022 all had their code-side fixes already implem
 - `src/portfolio/manager.py` lines 298-330: `_build_snapshot` populates both fields
 - `src/dashboard/callbacks.py` lines 160-228: two traces per strategy (solid realized, dotted unrealized); `hasattr` guard for backward compat
 
-## Test Suite
-258 passed, 8 skipped — 0 regressions.
+## Test Suite Baseline
+- Before this pass: 276 passed, 8 skipped (per issue-test-validator 2026-06-01)
+- After this pass: not run (WSL crash constraint — pytest prohibited)
 
-**Why:** The issue-resolver and bug-hunter agents working in prior passes apparently made code changes without updating issues.md status. This pass's primary job was to reconcile the issues.md with the actual code state.
+**Why:** The ISSUE-029/030/031 fixes are targeted one-to-three-line changes that can be verified by source inspection. No new tests written in this pass (test-validator agent handles that).
 **How to apply:** When reading issues.md, always cross-check the actual source files before concluding an issue is still open — the code may have already been fixed.

@@ -294,13 +294,15 @@ class TradingEngine:
             )
             return
 
-        # Handle CLOSE signals
+        # Handle CLOSE signals.
+        # ISSUE-031: match by symbol only — net mode holds one position per
+        # symbol regardless of which strategy/composite opened it.  Matching on
+        # strategy.name would silently skip positions whose strategy_name tag is
+        # a stale composite string (e.g. "composite[sma,rsi]") that no longer
+        # matches the current single-strategy name after a UI toggle.
         if signal.signal_type == SignalType.CLOSE:
             for position in portfolio.positions:
-                if (
-                    position.symbol == symbol
-                    and position.strategy_name == strategy.name
-                ):
+                if position.symbol == symbol:
                     await self._order_executor.close_position(position)
             return
 
@@ -374,7 +376,9 @@ class TradingEngine:
 
         for pos in positions:
             if not pos.strategy_name:
-                pos.strategy_name = symbol_attribution.get(pos.symbol)
+                # ISSUE-030: use `or ""` so an uncovered symbol never assigns
+                # None to the str-typed strategy_name field.
+                pos.strategy_name = symbol_attribution.get(pos.symbol) or ""
 
         self._portfolio_manager.update(positions, balance)
 

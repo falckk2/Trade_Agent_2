@@ -57,13 +57,12 @@ class TestPnLWatermarkNoDoubleCount:
         1. BUY position with realized_pnl=100 and unrealized=0
         2. Same ID but SELL (flip): cumulative realized_pnl=150
 
-        When the flip is detected, _record_trade is called on the PREVIOUS (BUY) position.
-        The BUY had realized_pnl=100, watermark was 0 → incremental = 100.
-
-        Then after the SELL is recorded as prev, update 3 closes the SELL (realized=150).
-        Incremental = 150 - 100 = 50.
-
-        This verifies the watermark correctly tracks the cumulative amount already recorded.
+        ISSUE-029 fix: the flip trade uses pos.realized_pnl (current tick = 150) as the
+        override rather than prev.realized_pnl (stale = 100).  The watermark starts at 0,
+        so the flip trade records incremental = 150 - 0 = 150 and the watermark advances
+        to 150.  When the SELL subsequently closes with the same realized_pnl=150 the
+        incremental is 150 - 150 = 0, correctly attributing all PnL to the flip event.
+        Total PnL = 150 + 0 = 150 (no double-counting, no under-counting).
         """
         # First update: BUY with realized_pnl=100
         pos_buy = _pos("p1", Side.BUY, realized_pnl=100.0, unrealized_pnl=0.0)
@@ -76,17 +75,17 @@ class TestPnLWatermarkNoDoubleCount:
 
         trades = pm.get_trade_history()
         assert len(trades) == 1  # flip of BUY recorded
-        # Records the BUY position: incremental = 100 - 0 = 100 (watermark was 0)
-        assert trades[0].pnl == pytest.approx(100.0)
-        # Watermark should now be 100 (the BUY's realized_pnl)
-        assert pm._last_recorded_realized_pnl.get("p1") == pytest.approx(100.0)
+        # ISSUE-029: override uses pos.realized_pnl=150; watermark was 0 → pnl = 150
+        assert trades[0].pnl == pytest.approx(150.0)
+        # Watermark advances to pos.realized_pnl=150
+        assert pm._last_recorded_realized_pnl.get("p1") == pytest.approx(150.0)
 
-        # Third update: SELL position closes
+        # Third update: SELL position closes (realized_pnl still 150 — no new PnL accrued)
         pm.update([], {"total_equity": 10150.0, "available": 10150.0})
         trades = pm.get_trade_history()
         assert len(trades) == 2
-        # SELL had realized=150, watermark was 100 → incremental = 50
-        assert trades[1].pnl == pytest.approx(50.0)
+        # SELL had realized=150, watermark was 150 → incremental = 0
+        assert trades[1].pnl == pytest.approx(0.0)
 
     def test_watermark_cleaned_up_after_position_closes(self, pm):
         """After a position fully disappears, its watermark entry is removed."""

@@ -81,7 +81,15 @@ class PortfolioManager(IPortfolioManager):
                             pos_id, pos.symbol, prev.side.value, pos.side.value,
                             prev.realized_pnl, pos.realized_pnl,
                         )
-                        self._record_trade(prev)
+                        # Pass the current pos's realized_pnl so the flip's
+                        # realized delta is captured correctly (ISSUE-029).
+                        # The old leg has no remaining unrealized PnL after
+                        # the flip, so override_unrealized_pnl=0 is used.
+                        self._record_trade(
+                            prev,
+                            realized_pnl_override=pos.realized_pnl,
+                            override_unrealized_pnl=0.0,
+                        )
 
             self._positions = list(current.values())
             self._prev_positions = current
@@ -240,7 +248,12 @@ class PortfolioManager(IPortfolioManager):
                     len(self._pending_fill_prices[(order.symbol, order.side)]),
                 )
 
-    def _record_trade(self, position: Position) -> None:
+    def _record_trade(
+        self,
+        position: Position,
+        realized_pnl_override: float | None = None,
+        override_unrealized_pnl: float | None = None,
+    ) -> None:
         """Record a closed position as a trade. Must be called with _lock held.
 
         BloFin's ``realized_pnl`` field is cumulative since the position was
@@ -248,17 +261,45 @@ class PortfolioManager(IPortfolioManager):
         recorded for each position ID so we can compute the *incremental*
         realized PnL for each trade record and avoid double-counting across
         consecutive flips.
+
+        Parameters
+        ----------
+        position:
+            The Position object whose metadata (symbol, side, entry_price, etc.)
+            is recorded.  In the flip case this is the *previous-tick* object so
+            the old side's metadata is preserved.
+        realized_pnl_override:
+            When provided (flip case), use this realized PnL value instead of
+            ``position.realized_pnl``.  The flip deposits realized PnL into the
+            *current* tick's position object, not the stale ``prev`` object
+            (ISSUE-029).
+        override_unrealized_pnl:
+            When provided (flip case), use this value instead of
+            ``position.unrealized_pnl``.  After a flip the old leg has no
+            remaining unrealized PnL, so 0.0 is passed.
         """
         strategy_name = position.strategy_name or "unknown"
         now = datetime.now(tz=timezone.utc)
         duration = (now - position.opened_at).total_seconds()
 
+        # Resolved realized PnL: use override (flip path) or position's own value
+        realized_now = (
+            realized_pnl_override
+            if realized_pnl_override is not None
+            else position.realized_pnl
+        )
+        unrealized_now = (
+            override_unrealized_pnl
+            if override_unrealized_pnl is not None
+            else position.unrealized_pnl
+        )
+
         # Incremental realized PnL since the last recorded flip (or since open)
         prev_realized = self._last_recorded_realized_pnl.get(position.id, 0.0)
-        incremental_realized = position.realized_pnl - prev_realized
-        pnl = incremental_realized + position.unrealized_pnl
+        incremental_realized = realized_now - prev_realized
+        pnl = incremental_realized + unrealized_now
         # Update the watermark so the next flip only records new realized PnL
-        self._last_recorded_realized_pnl[position.id] = position.realized_pnl
+        self._last_recorded_realized_pnl[position.id] = realized_now
 
         # Use the actual fill price from the close order when available.
         # The close order for a BUY is a SELL, and vice versa.

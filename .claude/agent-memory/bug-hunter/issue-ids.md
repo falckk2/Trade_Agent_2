@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-Last assigned ID: **ISSUE-027** (in `/home/rehan/Trade_Agent_2/issues.md`, audit on 2026-05-16).
+Last assigned ID: **ISSUE-031** (in `/home/rehan/Trade_Agent_2/issues.md`, fresh sweep on 2026-06-01). ISSUE-028 added by a live-run pass; ISSUE-029/030/031 added by the 2026-06-01 fresh codebase sweep.
 
 **Why:** issues.md is append-only — new issues must start at ISSUE-028 or higher.
 
