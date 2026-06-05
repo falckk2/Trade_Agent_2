@@ -1,4 +1,6 @@
+import json
 import logging
+from pathlib import Path
 
 from src.core.enums import Side, SignalType
 from src.core.models import PortfolioSnapshot, Position, Signal
@@ -18,6 +20,7 @@ class RiskManager(IRiskManager):
         default_stop_loss_pct: float = 0.02,
         default_take_profit_pct: float = 0.04,
         min_signal_strength: float = 0.3,
+        baseline_file: Path | None = None,
     ) -> None:
         self._max_position_pct = max_position_pct
         self._max_exposure_pct = max_exposure_pct
@@ -25,16 +28,50 @@ class RiskManager(IRiskManager):
         self._default_stop_loss_pct = default_stop_loss_pct
         self._default_take_profit_pct = default_take_profit_pct
         self._min_signal_strength = min_signal_strength
-        self._initial_equity: float | None = None  # Set on first portfolio update
+        self._baseline_file = baseline_file
+        self._initial_equity: float | None = self._load_baseline()
+
+    def _load_baseline(self) -> float | None:
+        """Load persisted initial equity from disk, if available."""
+        if self._baseline_file is None:
+            return None
+        try:
+            if self._baseline_file.exists():
+                data = json.loads(self._baseline_file.read_text())
+                equity = float(data["initial_equity"])
+                logger.info(
+                    "Drawdown baseline loaded from %s: $%.2f",
+                    self._baseline_file, equity,
+                )
+                return equity
+        except Exception:
+            logger.exception("Failed to load drawdown baseline from %s", self._baseline_file)
+        return None
+
+    def _save_baseline(self) -> None:
+        """Persist initial equity to disk so drawdown survives restarts."""
+        if self._baseline_file is None or self._initial_equity is None:
+            return
+        try:
+            self._baseline_file.parent.mkdir(parents=True, exist_ok=True)
+            self._baseline_file.write_text(
+                json.dumps({"initial_equity": self._initial_equity})
+            )
+        except Exception:
+            logger.exception("Failed to save drawdown baseline to %s", self._baseline_file)
 
     def set_initial_equity(self, equity: float) -> None:
         """Explicitly set the baseline equity for drawdown calculation.
 
         Call this once at startup with the opening balance so the drawdown
         window starts from the correct value rather than the first signal.
+        Only takes effect if no baseline is already set (persisted or in-memory).
+        Delete the baseline file to reset the drawdown window deliberately.
         """
         if self._initial_equity is None:
             self._initial_equity = equity
+            self._save_baseline()
+            logger.info("Drawdown baseline set to $%.2f", equity)
 
     def validate_signal(
         self, signal: Signal, portfolio: PortfolioSnapshot

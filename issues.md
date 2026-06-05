@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 33
-- Critical: 4 | High: 12 | Medium: 14 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 33
+- Total Issues: 34
+- Critical: 4 | High: 12 | Medium: 14 | Low: 4
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 34
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1701,5 +1701,25 @@ Add a `close_all_positions()` method to `TradingEngine` that fetches all open po
 **Fix History**:
 - **[2026-06-05] Fix attempted by issue-resolver**: Added `close_all_positions()` async method to `TradingEngine`. Modified `stop(close_positions: bool = True)` to call `close_all_positions()` before `disconnect()`. Failures on individual position closes are logged as exceptions (not raised) so a single failed close does not prevent the remaining positions from being attempted or the engine from completing its shutdown. The `close_positions=False` flag is available for callers that intentionally want to preserve positions across a restart. File: `src/engine/trading_engine.py`.
 - **[2026-06-05] Verified**: `stop()` now calls `close_all_positions()` which fetches positions via `get_positions()` and calls `close_position()` for each. Exceptions are caught per-position so a single failure is logged without aborting the shutdown sequence. The `close_positions` flag defaults to `True`. Resolved.
+
+---
+
+### ISSUE-034: `RiskManager._initial_equity` resets on every restart — drawdown limit bypassed after crash/restart
+- **Status**: Resolved
+- **Severity**: LOW
+- **Category**: Logic Error
+- **File(s)**: `src/risk/manager.py`, `main.py`
+- **Discovered**: 2026-06-05
+- **Discovered By**: code review
+
+**Description**:
+`TradingEngine.start()` calls `set_initial_equity(opening_equity)` every time the engine starts. If the bot lost 8% and was restarted, `_initial_equity` resets to the post-loss balance. The 10% drawdown check now starts from the already-drawn-down level — effectively forgiving the prior losses. An operator expecting a hard 10%-from-peak stop has no protection after a crash or intentional restart.
+
+**Fix Suggestion**:
+Persist `_initial_equity` to `data/initial_equity.json`. Load on startup; only set if no persisted baseline exists. Operator deletes the file to deliberately reset the drawdown window.
+
+**Fix History**:
+- **[2026-06-05] Fix attempted by issue-resolver**: Added `baseline_file: Path | None` parameter to `RiskManager.__init__`. `_load_baseline()` reads `initial_equity.json` at construction; `_save_baseline()` writes it when `set_initial_equity()` sets a new value. `set_initial_equity()` is now a no-op if a persisted baseline already exists (prevents restart from overwriting prior baseline). Wired `baseline_file=data_dir / "initial_equity.json"` in `main.py`'s `build_components()`. Files: `src/risk/manager.py`, `main.py`.
+- **[2026-06-05] Verified**: Persistence logic confirmed correct by inspection. Resolved.
 
 ---

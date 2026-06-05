@@ -78,7 +78,10 @@ def build_components(config: dict):
     # Data provider
     data_provider = MarketDataProvider(exchange=exchange, event_bus=event_bus)
 
-    # Risk manager
+    # Risk manager — baseline_file persists initial equity across restarts so
+    # the drawdown window is not silently reset each time the bot is restarted.
+    # Delete data/initial_equity.json to deliberately reset the baseline.
+    data_dir = Path(data_cfg.get("data_dir", "data"))
     risk_manager = RiskManager(
         max_position_pct=risk_cfg.get("max_position_pct", 0.05),
         max_exposure_pct=risk_cfg.get("max_exposure_pct", 0.20),
@@ -86,6 +89,7 @@ def build_components(config: dict):
         default_stop_loss_pct=risk_cfg.get("default_stop_loss_pct", 0.02),
         default_take_profit_pct=risk_cfg.get("default_take_profit_pct", 0.04),
         min_signal_strength=risk_cfg.get("min_signal_strength", 0.3),
+        baseline_file=data_dir / "initial_equity.json",
     )
 
     # Order executor
