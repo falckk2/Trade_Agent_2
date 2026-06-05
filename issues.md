@@ -3,9 +3,9 @@
 _Last updated: 2026-06-01_
 
 ## Summary
-- Total Issues: 35
-- Critical: 4 | High: 12 | Medium: 15 | Low: 4
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 35
+- Total Issues: 37
+- Critical: 4 | High: 12 | Medium: 16 | Low: 5
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 37
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1748,5 +1748,42 @@ Live API response confirmed: `averagePrice: '1584.12'`, `filledSize: '6.40000000
 **Fix History**:
 - **[2026-06-05] Fix attempted by issue-resolver**: Changed `accFillSz` → `filledSize` (with `accFillSz` as fallback for backward compatibility) and `avgPx` → `averagePrice` in `_parse_order`. Updated mock data in `tests/test_issue_001_get_order_two_phase_lookup.py` to use real field names. Also added a final `get_order` attempt in the ISSUE-033 position-check fallback path so the fill price is retrieved even when the position check is the one that detects the fill. Files: `src/exchange/blofin_exchange.py`, `src/execution/executor.py`, `tests/test_issue_001_get_order_two_phase_lookup.py`.
 - **[2026-06-05] Verified**: Fix confirmed. 308 tests pass. Resolved.
+
+---
+
+### ISSUE-036: Exchange fees not tracked — `TradeRecord.pnl` always optimistic by ~0.12%
+- **Status**: Resolved
+- **Severity**: MEDIUM
+- **Category**: Logic Error
+- **File(s)**: `src/core/models.py`, `src/exchange/blofin_exchange.py`, `src/portfolio/manager.py`
+- **Discovered**: 2026-06-05
+- **Discovered By**: live trial run analysis (BloFin order history shows `fee` field; trade records showed no fee deduction)
+
+**Description**:
+BloFin charges ~0.06% taker fee per fill. For a round-trip (entry + exit), total fees are ~0.12% of position value. `TradeRecord.pnl` did not account for fees — every reported P&L was optimistic by the fee amount. Over many trades this compounds into a significant discrepancy between reported and actual returns.
+
+**Fix History**:
+- **[2026-06-05] Fix attempted by issue-resolver**: Added `fee: float = 0.0` to `Order` and `TradeRecord`. `_parse_order` now reads `abs(float(item.get("fee") or 0))` from BloFin history responses. `PortfolioManager` gains `_pending_fees` (parallel FIFO deque to `_pending_fill_prices`). `_on_order_filled` caches both fill price and fee. `_record_trade` pops entry and exit fees, subtracts total from pnl. CSV gains `fee` column; old rows load with `fee=0`. Files: `src/core/models.py`, `src/exchange/blofin_exchange.py`, `src/portfolio/manager.py`.
+- **[2026-06-05] Verified**: Fee caching confirmed in live trial debug logs (`fee=0.033184` BTC, `fee=0.063655` ETH). CSV header and backward-compatible loader confirmed. Resolved.
+
+---
+
+### ISSUE-037: Positions closed by `close_all_positions()` on shutdown not recorded as trades
+- **Status**: Resolved
+- **Severity**: LOW
+- **Category**: Logic Error
+- **File(s)**: `src/engine/trading_engine.py` (`close_all_positions`)
+- **Discovered**: 2026-06-06
+- **Discovered By**: code review of shutdown sequence
+
+**Description**:
+`close_all_positions()` closes positions on the exchange and publishes `ORDER_FILLED` events (caching fill prices and fees). But `portfolio_manager.update()` is never called afterwards. `_record_trade` is only triggered by `update()` detecting that a position ID has disappeared from the exchange. Without a final `update([], balance)` call, the closure is never detected locally, and `save_trade_history()` in `stop()` saves the history without those trades. They are lost permanently — the next startup won't see those positions (they're closed on exchange) and will never record them.
+
+**Evidence**:
+Multiple trials showed "Loaded N trades / Saved N trades" — same count despite positions being closed on shutdown. `_on_order_filled` cached fees correctly (debug logs showed correct queuing) but no "Trade closed" log ever appeared for shutdown-closed positions.
+
+**Fix History**:
+- **[2026-06-06] Fix attempted by issue-resolver**: After closing all positions in `close_all_positions()`, fetch the current balance and call `portfolio_manager.update([], balance)`. The empty position list causes every entry in `_prev_positions` to be detected as closed, triggering `_record_trade` with the already-cached fill prices and fees. This runs before `save_trade_history()` in `stop()`, so the shutdown trades are included in the saved CSV. Balance fetch failure falls back to last snapshot equity. File: `src/engine/trading_engine.py`.
+- **[2026-06-06] Verified**: Logic confirmed correct by inspection. Resolved.
 
 ---

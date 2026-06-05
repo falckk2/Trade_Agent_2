@@ -163,8 +163,15 @@ class TradingEngine:
         logger.info("Trading engine stopped")
 
     async def close_all_positions(self) -> None:
-        """Market-close every open position. Called on shutdown so no positions
-        are left unmonitored after the engine exits."""
+        """Market-close every open position and record the trades.
+
+        After closing each position on the exchange, calls
+        portfolio_manager.update([], balance) with an empty position list so
+        the closure is detected and _record_trade fires — including fee
+        deduction — before save_trade_history() is called in stop().
+        Without this step the trades are closed on the exchange but never
+        appear in trade_history.csv.
+        """
         try:
             positions = await self._exchange.get_positions()
         except Exception:
@@ -186,6 +193,22 @@ class TradingEngine:
                     "Failed to close %s %s on shutdown — manual close required",
                     position.symbol, position.side.value,
                 )
+
+        # Force portfolio_manager to detect all closures and call _record_trade.
+        # Passing an empty position list makes every position in _prev_positions
+        # appear as closed, which triggers trade recording with the fill prices
+        # and fees already cached by the ORDER_FILLED events above.
+        try:
+            balance = await self._exchange.get_balance()
+        except Exception:
+            snapshot = self._portfolio_manager.get_snapshot()
+            balance = {
+                "total_equity": snapshot.total_equity,
+                "available": snapshot.total_equity,
+            }
+            logger.warning("Could not fetch balance for shutdown trade recording — using last snapshot")
+        self._portfolio_manager.update([], balance)
+        logger.info("Shutdown trade records committed for %d position(s)", len(positions))
 
     @property
     def is_running(self) -> bool:
