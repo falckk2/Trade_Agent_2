@@ -1,4 +1,12 @@
+# Strategy parameters validated by backtest sweep on 2026-06-10
+# (scripts/tune_strategies.py, 1H candles, in-sample 2026-01-01..2026-05-01,
+# out-of-sample 2026-05-01..2026-06-10, fees 0.06%/side, slippage 1 bps,
+# SL 2% / TP 4%). Modest edges on a single 5-month window — re-validate
+# periodically and demo-trial before risking real funds.
+
 strategies:
+  # BTC 1H: IS +$4.71 (PF 1.16, 112 trades), OOS +$1.46 (PF 1.31, 33 trades)
+  # — positive in both windows; best risk-adjusted of the BTC grid.
   - name: sma_crossover_btc
     type: sma_crossover
     weight: 1.0
@@ -8,35 +16,24 @@ strategies:
     symbols:
       - "BTC-USDT"
 
-  - name: rsi_btc
-    type: rsi
-    weight: 1.0
-    params:
-      period: 14
-      overbought: 70
-      oversold: 30
-    symbols:
-      - "BTC-USDT"
-
+  # ETH 1H: IS +$26.27 (PF 1.29, 134 trades), OOS +$8.21 (PF 1.49, 37 trades)
+  # — strongest result of the sweep; changed from 10/30 (which was negative
+  # on ETH: IS -$8.64, OOS -$3.11).
   - name: sma_crossover_eth
     type: sma_crossover
     weight: 1.0
     params:
-      fast_period: 10
+      fast_period: 5
       slow_period: 30
     symbols:
       - "ETH-USDT"
 
-  - name: rsi_eth
-    type: rsi
-    weight: 1.0
-    params:
-      period: 14
-      overbought: 70
-      oversold: 30
-    symbols:
-      - "ETH-USDT"
-
+  # RSI strategies removed 2026-06-10: net-negative across the entire
+  # parameter grid (period 7/14/21 x levels 70/30, 75/25, 80/20) on both
+  # symbols and both timeframes tested. On 1H the losses were severe
+  # (PF 0.39-0.57, e.g. rsi_btc IS -$61.65). Re-add only with backtest
+  # evidence.
+  #
   # ping_pong_test removed — this is a test-only strategy that issues
   # alternating market orders every 10 s with no market analysis.
   # To re-enable for pipeline testing, set ENABLE_TEST_STRATEGIES=1 in .env

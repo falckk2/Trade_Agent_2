@@ -18,7 +18,11 @@ risk:
   min_signal_strength: 0.05
 
 engine:
-  timeframe: "5m"
+  # 1H chosen by backtest sweep 2026-06-10 (scripts/tune_strategies.py,
+  # Jan-Apr 2026 in-sample / May-Jun out-of-sample): every SMA/RSI parameter
+  # combination was net-negative after fees on 5m for both symbols, while
+  # SMA crossovers on 1H were modestly positive in both windows.
+  timeframe: "1H"
   candle_limit: 200
   # Tick cadence. With 5m candles, strategy signals can only change once per
   # candle, so very short intervals mostly burn REST calls (FABLE-008).

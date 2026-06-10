@@ -43,11 +43,16 @@ class TestPingPongAbsentFromYaml:
         assert "#" in raw, "Expected commented-out documentation in strategies.yaml"
 
     def test_production_strategies_are_present(self, strategies_list):
-        """Expected production strategies are still in the YAML."""
+        """Expected production strategies are still in the YAML.
+
+        Roster updated 2026-06-10: RSI strategies removed after the backtest
+        sweep showed them net-negative across the whole parameter grid
+        (see FABLE-010 in fable_issues.md); SMA crossovers kept.
+        """
         names = [s.get("name") for s in strategies_list]
         assert "sma_crossover_btc" in names
-        assert "rsi_btc" in names
+        assert "sma_crossover_eth" in names
 
-    def test_strategy_count_is_four(self, strategies_list):
-        """Exactly 4 production strategies should be configured (2 BTC, 2 ETH)."""
-        assert len(strategies_list) == 4
+    def test_strategy_count_is_two(self, strategies_list):
+        """Exactly 2 production strategies should be configured (1 BTC, 1 ETH)."""
+        assert len(strategies_list) == 2

@@ -7,9 +7,10 @@ This register tracks architectural and structural issues found during a full-cod
 Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplicated here. FABLE-002 is likely a contributing cause of ISSUE-043's reconnect storms — resolve them together.
 
 ## Summary
-- Total Issues: 12
-- Critical: 1 | High: 3 | Medium: 5 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 12 | Fix Failed: 0 | Resolved: 0
+- Total Issues: 13
+- Critical: 1 | High: 3 | Medium: 6 | Low: 3
+- Open: 0 | Investigating: 0 | Fix Attempted: 10 | Fix Failed: 0 | Resolved: 3
+- _Verification pass 2026-06-10 (later same day): FABLE-001 RESOLVED via live demo trade (TP/SL trigger registered on exchange with exact submitted prices; BloFin auto-cancels attached TP/SL on position close — `scripts/verify_tpsl_demo.py`). FABLE-003 RESOLVED via observed clean SIGTERM shutdown + unit coverage. FABLE-013 (new: fetch script single-page incremental bug) found, fixed, and verified — all historical data now continuous through 2026-06-10. Parameter sweep (`scripts/tune_strategies.py`) drove config changes: timeframe 5m → 1H, ETH SMA 10/30 → 5/30, RSI strategies removed (net-negative across the entire grid). See FABLE-010 fix history for numbers._
 - _Review basis: full read of `main.py`, `src/engine/`, `src/exchange/`, `src/execution/`, `src/portfolio/`, `src/risk/`, `src/data/`, plus config. Baseline test run: pytest tests/ → 308 passed, 8 skipped._
 - _Suggested fix order: FABLE-001 → FABLE-003 → FABLE-002 → FABLE-004 → FABLE-005 → remainder._
 - _Fix pass by Fable 5: 2026-06-10 — all 12 issues addressed in one session (FABLE-008 partially: config mitigation only). 58 new tests across 8 new test files (test_fable_001/003/004/005/006/007/009/010/011/012). pytest tests/ → 383 passed, 8 skipped — 0 regressions against the 308-pass baseline. Backtest CLI verified against real historical data (and found all 4 configured strategies net-negative after fees — see FABLE-010). ISSUE-041 from issues.md fixed incidentally alongside FABLE-012. Items needing live/demo verification before promotion to Resolved: FABLE-001 (TP/SL trigger format against real API), FABLE-002 (ISSUE-043 reconnect frequency re-measurement), FABLE-011 (real Telegram delivery)._
@@ -19,7 +20,7 @@ Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplica
 ## Issue Log
 
 ### FABLE-001: Positions have no exchange-side stop-loss/take-profit — protection dies with the process
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: CRITICAL
 - **Category**: Risk / Design Gap
 - **File(s)**: `src/execution/executor.py` (`execute_signal`), `src/risk/manager.py` (`get_stop_loss` :167, `get_take_profit` :174), `src/engine/trading_engine.py` (`_check_exits` :221)
@@ -45,6 +46,7 @@ BloFin's `place_order` supports attaching TP/SL trigger parameters (`tpTriggerPr
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Verified SDK support: `trading.place_order(**kwargs)` forwards arbitrary params to `/api/v1/trade/order`, and `get_active_tpsl_orders`/`cancel_tpsl_order` exist in blofin 0.5.0. Implemented: (1) `IExchange.place_order` gained optional `stop_loss`/`take_profit`; `BloFinExchange.place_order` attaches `slTriggerPrice`/`tpTriggerPrice` (tick-rounded via new `_round_to_tick` using Decimal; `tick_size` now cached in `_instrument_specs`) with order price `-1` (market on trigger). (2) New `IExchange.cancel_tpsl_orders(symbol)` lists and cancels pending TP/SL orders; `OrderExecutor.close_position` calls it after `_await_fill` so orphaned triggers cannot re-open a position in net mode. (3) `TradingEngine._process_strategy_symbol` computes levels via `risk_manager.get_stop_loss/get_take_profit(signal, current_price)` and passes them through `execute_signal` (interface updated). `_check_exits` retained as software backstop. Tests: new `tests/test_fable_001_exchange_side_tpsl.py` (11 tests: trigger attachment, omission when unset, tick rounding, cancel iteration/error isolation, executor forwarding, close cleanup + failure tolerance, engine wiring); 3 assertions in `tests/unit/test_executor.py` updated for the new kwargs. pytest tests/ → 319 passed, 8 skipped. NOT yet verified against live/demo API — trigger price string format and `-1` order price convention need a live trial.
+- **[2026-06-10] Verified live (demo account) — RESOLVED**: `scripts/verify_tpsl_demo.py` placed a min-size BTC-USDT market BUY with `slTriggerPrice=60648`/`tpTriggerPrice=64361.1` (order price `-1`): order filled at 61889.7, and `get_active_tpsl_orders` showed the trigger registered live with exactly the submitted prices (`state=live`, size 0.1 contracts). Bonus finding: after the position was closed by a regular order, BloFin **auto-cancelled the attached TP/SL** (`cancel_tpsl_orders → 0`, final tpsl count 0) — the executor's post-close cleanup is a redundant safety net, not a necessity. Final state flat. RESULT: PASS.
 
 ---
 
@@ -86,7 +88,7 @@ Apply uniformly to all client calls listed above (a small private helper like `a
 ---
 
 ### FABLE-003: Shutdown race — `close_all_positions` runs while a tick may still be in flight
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: HIGH
 - **Category**: Concurrency / Logic Error
 - **File(s)**: `src/engine/trading_engine.py` (`start` :132-154, `stop` :156-163), `main.py` (`run_engine` :225-233)
@@ -116,7 +118,7 @@ Write a regression test: start engine with a slow fake tick, trigger stop mid-ti
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Implemented fix-suggestion option 2. `start()` now owns the full lifecycle: cleanup (`_shutdown_cleanup` = close positions → disconnect → save trade history) runs in its `finally` block, strictly ordered after the last tick. New `_stop_requested`/`_drained` asyncio Events: the interval sleep is `asyncio.wait_for(_stop_requested.wait(), timeout=interval)` so stop is immediate even with long intervals; `stop()` flips the flag, sets the event, and awaits `_drained` — it returns only after cleanup completed. `stop(close_positions=False)` honored via `_close_positions_on_stop`. If `start()` never ran, `stop()` performs cleanup directly (previous behavior preserved). `main.py` now awaits `engine_task` (which completes naturally — no longer cancelled un-awaited) and cancels+awaits `ws_task`. Tests: new `tests/test_fable_003_shutdown_race.py` (6 tests: in-flight tick ordering vs close_all, stop-returns-after-cleanup, interval-sleep interruption, no tick after stop, close_positions=False path, stop-without-start). pytest tests/ → 325 passed, 8 skipped.
-- **[2026-06-10] Demo trial**: SIGTERM shutdown verified live — full ordered sequence (signal → engine stopping → position check → exchange disconnect → trade history save → engine stopped → WS disconnect → "Shutdown complete") completed cleanly in 0.4s, no errors, exit code 0. Minor cosmetic note: trade history is saved twice at shutdown (once in `_shutdown_cleanup`, once in `main.py`'s `finally`) — harmless pre-existing duplication.
+- **[2026-06-10] Demo trial — RESOLVED**: SIGTERM shutdown verified live — full ordered sequence (signal → engine stopping → position check → exchange disconnect → trade history save → engine stopped → WS disconnect → "Shutdown complete") completed cleanly in 0.4s, no errors, exit code 0. Combined with the 6 unit tests covering the race directly, promoted to Resolved. Minor cosmetic note: trade history is saved twice at shutdown (once in `_shutdown_cleanup`, once in `main.py`'s `finally`) — harmless pre-existing duplication.
 
 ---
 
@@ -280,6 +282,7 @@ Keep it synchronous and dependency-free (pandas is already available). Defer par
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Historical data already existed (`scripts/fetch_historical_data.py` → `data/historical/<symbol>/<tf>.csv`, BTC/ETH 5m through 2026-03-27), so only the replay engine was needed. New `src/backtest/engine.py`: synchronous `Backtester` — fills at next-candle open (no look-ahead), adverse slippage in bps, per-side fees (default 0.06% taker), net-mode single position with flip-on-opposite-signal, SL/TP checked against each candle's high/low (stop-first when ambiguous), end-of-data force close, sliding `window=200` candles per `analyze()` call matching the live engine's `candle_limit` (avoids O(n²) over large histories). Stats computed by the new shared `src/portfolio/stats.py:compute_performance_stats` — extracted from `PortfolioManager.get_performance_stats` (FABLE-012), which now delegates to it, so live and backtest numbers are identical in definition. CLI `scripts/run_backtest.py` loads strategies.yaml via StrategyFactory and prints a per-strategy table. Tests: new `tests/test_fable_010_backtester.py` (10 tests with a scripted stub strategy: round-trip P&L, per-side fees, short profits, flip, SL trigger price, no-look-ahead, slippage direction, force close, stats parity with shared function, equity curve). **First real run (26 days of data, `--days 100`): ALL FOUR configured strategies are net-negative after fees** — sma_crossover ~27% win rate / PF 0.62-0.73, rsi 50-56% win rate / PF 0.71-0.87. Strategy parameters need re-tuning before live use. pytest tests/ → 383 passed, 8 skipped. Note: historical data is stale (ends 2026-03-27) — rerun `scripts/fetch_historical_data.py` for current coverage.
+- **[2026-06-10] Data refreshed + parameter sweep run**: Historical data refilled through 2026-06-10 with zero gaps (required fixing FABLE-013 in the fetch script first). New `scripts/tune_strategies.py` sweeps SMA (fast 5-30 × slow 20-150) and RSI (period 7/14/21 × 3 level pairs) grids with an in-sample (2026-01-01..05-01) / out-of-sample (05-01..06-10) split. Findings: **every combination is net-negative on 5m** for both symbols (fees + noise); on **1H**, SMA crossovers are modestly positive in both windows (BTC 10/30: IS PF 1.16 / OOS PF 1.31; ETH 5/30: IS +$26.27 PF 1.29 / OOS +$8.21 PF 1.49) while RSI loses across the whole grid (PF 0.39-0.93). Config updated accordingly: `engine.timeframe` 5m → 1H, ETH SMA params 10/30 → 5/30, both RSI strategies removed (evidence documented in strategies.yaml comments). Caveats: single 5-month window, no walk-forward, modest edges — demo-trial before real funds.
 
 ---
 
@@ -302,6 +305,22 @@ Add a minimal `INotifier` interface (fits the existing ABC/DI pattern) with a Te
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Added `EventType.ALERT` (payload `{"level", "message"}`), `src/notifications/` with `INotifier` ABC (provides `attach(event_bus)` that subscribes `_on_alert`) and `TelegramNotifier` (Bot API POST in a daemon thread — never blocks the loop, never raises; no-op with INFO log when `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` unset). Publishers: (1) `RiskManager` (optional `event_bus` ctor param, wired in `main.py`) publishes a critical alert via `publish_sync` once per halt onset — `_drawdown_alerted` flag resets when drawdown recovers below the limit; (2) `TradingEngine.close_all_positions` publishes critical "MANUAL CLOSE REQUIRED" on a failed shutdown close; (3) `BloFinWebSocket._check_reconnect_storm` (called after each successful reconnect) publishes a warning when ≥5 reconnects land within 10 min, throttled to once per window. `main.py` builds the notifier from env vars and attaches it to the bus. Tests: new `tests/test_fable_011_alerting.py` (10 tests: halt alerts once + re-arms on recovery, no-bus safety, shutdown-close failure alert, storm threshold + once-per-window, notifier disabled/posting/never-raises/event-routing). pytest tests/ → 373 passed, 8 skipped. Note: Telegram delivery itself untested against the real API — needs a live token to verify end-to-end.
+
+---
+
+### FABLE-013: `_incremental_update` in fetch_historical_data.py fetches only one page — silent interior data holes
+- **Status**: Resolved
+- **Severity**: MEDIUM
+- **Category**: Bug / Data Integrity
+- **File(s)**: `scripts/fetch_historical_data.py` (`_incremental_update`)
+- **Discovered**: 2026-06-10
+- **Discovered By**: Fable 5 — gap analysis after a refresh appended only 1440 rows against a 75-day hole
+
+**Description**:
+The incremental-update path issued a **single** API request with `before=latest_ts` (no pagination loop), so it could never append more than one page (~1440 candles) per run. Any file more than one page stale got the *newest* 1440 candles appended, leaving a silent interior hole — and because the file's max timestamp was then current, subsequent runs considered the file up to date and never repaired it. Observed: 5m data had a 1672-hour (~70-day) hole between 2026-03-27 and 2026-06-05 after an incremental run. Backtests spanning the hole would silently produce wrong results.
+
+**Fix History**:
+- **[2026-06-10] Fixed by Fable 5**: Rewrote `_incremental_update` to page backwards from now using the `after` cursor (same convention as `_backfill`) until the page overlaps `latest_ts`, collecting all rows newer than it. One-off repair for the pre-existing holes: truncated each affected CSV at its interior gap (rows after the hole dropped), then re-ran the fetch — recovered 21,507 5m rows per symbol; all 12 symbol/timeframe files verified continuous (0 gaps > 2× bar interval) through 2026-06-10. Note: the fixed incremental path assumes the file has no interior holes (only appends past max timestamp) — true for all files after this repair.
 
 ---
 

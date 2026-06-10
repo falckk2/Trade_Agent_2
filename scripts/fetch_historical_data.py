@@ -213,32 +213,33 @@ def _incremental_update(
     bar: str,
     existing: pd.DataFrame,
 ) -> list[dict]:
-    """Return candles newer than the last row in `existing`.
+    """Return all candles newer than the last row in `existing`.
 
-    Uses `before` (OKX convention) to fetch data NEWER than latest_ts.
+    Pages backwards from now using the `after` cursor (same convention as
+    _backfill) until the page overlaps data already on disk. The previous
+    single-request implementation could only append one page (~1440 candles),
+    silently leaving a hole whenever the file was more than one page stale
+    (FABLE-013).
     """
     latest_ts = existing["timestamp"].max().to_pydatetime()
-    latest_ms = int(latest_ts.timestamp() * 1000)
 
-    kwargs: dict = {"inst_id": symbol, "bar": bar, "limit": CANDLES_PER_REQUEST,
-                    "before": str(latest_ms)}
-    try:
-        resp = client.public.get_candlesticks(**kwargs)
-    except Exception:
-        return []
+    pages: list[list[dict]] = []
+    after_ms: int | None = None  # None = newest page; walks backwards
+    while True:
+        page = _fetch_page_retry(client, symbol, bar, after_ms)
+        if not page:
+            break
+        new_rows = [r for r in page if r["timestamp"] > latest_ts]
+        if new_rows:
+            pages.append(new_rows)
+        oldest_ts = page[0]["timestamp"]
+        if oldest_ts <= latest_ts:
+            break  # reached data we already have
+        after_ms = int(oldest_ts.timestamp() * 1000)
+        time.sleep(RATE_LIMIT_SLEEP)
 
-    rows = []
-    for item in resp.get("data", []):
-        ts = datetime.fromtimestamp(int(item[0]) / 1000, tz=timezone.utc)
-        if ts > latest_ts:
-            rows.append({
-                "timestamp": ts,
-                "open":   float(item[1]),
-                "high":   float(item[2]),
-                "low":    float(item[3]),
-                "close":  float(item[4]),
-                "volume": float(item[5]),
-            })
+    pages.reverse()
+    rows = [row for page in pages for row in page]
     rows.sort(key=lambda r: r["timestamp"])
     return rows
 
