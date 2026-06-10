@@ -152,6 +152,32 @@ def build_components(config: dict):
     }
 
 
+def register_strategies(
+    engine: TradingEngine, factory: StrategyFactory, strategies_config: list[dict]
+) -> list[str]:
+    """Register configured strategies with the engine; returns their names.
+
+    Entries with `enabled: true` are activated immediately so a restart
+    resumes trading without a dashboard click (FABLE-014). The default is
+    disabled — enabling a strategy is an explicit, version-controlled
+    decision in strategies.yaml. Dashboard toggles remain runtime overrides.
+    """
+    names: list[str] = []
+    for entry in strategies_config:
+        strategy = factory.get_instance(entry["name"])
+        if not strategy:
+            continue
+        engine.add_strategy(
+            strategy,
+            symbols=entry.get("symbols"),
+            weight=float(entry.get("weight", 1.0)),
+        )
+        if entry.get("enabled", False):
+            engine.enable_strategy(strategy.name)
+        names.append(strategy.name)
+    return names
+
+
 def main():
     # Load configs
     config = load_config()
@@ -161,21 +187,10 @@ def main():
     components = build_components(config)
     engine: TradingEngine = components["engine"]
 
-    # Create strategies
+    # Create and register strategies
     factory = StrategyFactory()
-    strategies = factory.create_from_config(strategies_config)
-
-    # Register strategies with engine
-    for entry in strategies_config:
-        strategy = factory.get_instance(entry["name"])
-        if strategy:
-            engine.add_strategy(
-                strategy,
-                symbols=entry.get("symbols"),
-                weight=float(entry.get("weight", 1.0)),
-            )
-
-    strategy_names = [s.name for s in strategies]
+    factory.create_from_config(strategies_config)
+    strategy_names = register_strategies(engine, factory, strategies_config)
 
     # Create dashboard
     dash_cfg = config.get("dashboard", {})

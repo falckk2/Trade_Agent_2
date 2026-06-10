@@ -7,9 +7,13 @@
 strategies:
   # BTC 1H: IS +$4.71 (PF 1.16, 112 trades), OOS +$1.46 (PF 1.31, 33 trades)
   # — positive in both windows; best risk-adjusted of the BTC grid.
+  # `enabled: true` activates the strategy at startup (FABLE-014) — restarts
+  # resume trading without a dashboard click. Set false to require manual
+  # enablement. Demo trial started 2026-06-10.
   - name: sma_crossover_btc
     type: sma_crossover
     weight: 1.0
+    enabled: true
     params:
       fast_period: 10
       slow_period: 30
@@ -22,6 +26,7 @@ strategies:
   - name: sma_crossover_eth
     type: sma_crossover
     weight: 1.0
+    enabled: true
     params:
       fast_period: 5
       slow_period: 30

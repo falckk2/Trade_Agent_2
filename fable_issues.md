@@ -7,9 +7,10 @@ This register tracks architectural and structural issues found during a full-cod
 Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplicated here. FABLE-002 is likely a contributing cause of ISSUE-043's reconnect storms — resolve them together.
 
 ## Summary
-- Total Issues: 13
-- Critical: 1 | High: 3 | Medium: 6 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 9 | Fix Failed: 0 | Resolved: 4
+- Total Issues: 16
+- Critical: 1 | High: 3 | Medium: 8 | Low: 4
+- Open: 2 (FABLE-015 supervision, FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 10 | Fix Failed: 0 | Resolved: 4
+- _2026-06-10 (fourth pass): FABLE-014/015/016 filed from operational review. FABLE-014 fixed same day (`enabled:` flag in strategies.yaml + `register_strategies()`); both SMA strategies enabled and a long-running demo trial launched on the 1H config. FABLE-015 (systemd unit) and FABLE-016 (dash-ag-grid migration) remain open by choice — small, well-scoped tasks._
 - _Third pass 2026-06-10 (evening): ISSUE-040/042/043 in issues.md resolved (043 root cause: server requires client pings every ~30s and inbound data does not reset the timer — fixed with fixed 15s ping cadence, verified by 10-min soak: 1 reconnect vs ~16 expected). FABLE-002 promoted to Resolved with corrected attribution. pytest → 395 passed, 8 skipped._
 - _Verification pass 2026-06-10 (later same day): FABLE-001 RESOLVED via live demo trade (TP/SL trigger registered on exchange with exact submitted prices; BloFin auto-cancels attached TP/SL on position close — `scripts/verify_tpsl_demo.py`). FABLE-003 RESOLVED via observed clean SIGTERM shutdown + unit coverage. FABLE-013 (new: fetch script single-page incremental bug) found, fixed, and verified — all historical data now continuous through 2026-06-10. Parameter sweep (`scripts/tune_strategies.py`) drove config changes: timeframe 5m → 1H, ETH SMA 10/30 → 5/30, RSI strategies removed (net-negative across the entire grid). See FABLE-010 fix history for numbers._
 - _Review basis: full read of `main.py`, `src/engine/`, `src/exchange/`, `src/execution/`, `src/portfolio/`, `src/risk/`, `src/data/`, plus config. Baseline test run: pytest tests/ → 308 passed, 8 skipped._
@@ -323,6 +324,57 @@ The incremental-update path issued a **single** API request with `before=latest_
 
 **Fix History**:
 - **[2026-06-10] Fixed by Fable 5**: Rewrote `_incremental_update` to page backwards from now using the `after` cursor (same convention as `_backfill`) until the page overlaps `latest_ts`, collecting all rows newer than it. One-off repair for the pre-existing holes: truncated each affected CSV at its interior gap (rows after the hole dropped), then re-ran the fetch — recovered 21,507 5m rows per symbol; all 12 symbol/timeframe files verified continuous (0 gaps > 2× bar interval) through 2026-06-10. Note: the fixed incremental path assumes the file has no interior holes (only appends past max timestamp) — true for all files after this repair.
+
+---
+
+### FABLE-014: Enabled-strategy state lost on every restart — unattended restarts silently stop trading
+- **Status**: Fix Attempted
+- **Severity**: MEDIUM
+- **Category**: Operations / Design Gap
+- **File(s)**: `main.py` (strategy registration), `src/engine/trading_engine.py` (`_enabled_strategies`), `config/strategies.yaml`
+- **Discovered**: 2026-06-10
+- **Discovered By**: Fable 5 — operational review after the fix pass
+
+**Description**:
+`TradingEngine._enabled_strategies` starts empty and is only mutated by dashboard toggle clicks; nothing persists it. Every process restart therefore comes up with all strategies disabled until a human clicks the dashboard. Safe-by-default for first run, but combined with any crash-restart mechanism (FABLE-015) it means an unattended bot silently stops trading after a restart — positions get closed at shutdown (FABLE-003), then the bot idles indefinitely while appearing healthy in logs.
+
+**Fix Suggestion**:
+Add an optional `enabled: true|false` (default false) per strategy entry in `config/strategies.yaml`; `main.py` enables flagged strategies at startup. This makes restart behavior explicit, declarative, and version-controlled. Dashboard toggles remain runtime overrides (intentionally not persisted — the config is the source of truth for what runs after a restart; persisting clicks would create a second, invisible source of truth).
+
+**Fix History**:
+- **[2026-06-10] Fix attempted by Fable 5**: Strategy registration extracted from `main()` into testable `register_strategies(engine, factory, strategies_config)`; entries with `enabled: true` are activated via `engine.enable_strategy()` at startup (default remains disabled). Both SMA strategies set `enabled: true` in strategies.yaml for the demo trial started 2026-06-10. Dashboard toggles unchanged (runtime overrides, deliberately not persisted). Tests: new `tests/test_fable_014_config_enabled_strategies.py` (4 tests: flag activates, false/absent stays disabled, unknown entry skipped, production config guard). pytest tests/ → 399 passed, 8 skipped.
+
+---
+
+### FABLE-015: No process supervision — a crash at 3am stays down until someone notices
+- **Status**: Open
+- **Severity**: MEDIUM
+- **Category**: Operations
+- **File(s)**: deployment (no systemd unit / Docker / supervisor config exists)
+- **Discovered**: 2026-06-10
+- **Discovered By**: Fable 5 — operational review
+
+**Description**:
+The bot runs as a foreground `python main.py` process. There is no systemd unit, Docker container, or supervisor configuration, so any crash (OOM, unhandled error outside the tick loop, host reboot) leaves it down with no restart and no notification (FABLE-011's alerting only fires while the process is alive — it cannot report its own death).
+
+**Fix Suggestion**:
+Add a systemd user unit (`docs/trade-agent.service` or `deploy/`): `Restart=on-failure`, `RestartSec=30`, `WantedBy=default.target`, working directory + venv python path, journald for logs. Pairs with FABLE-014: with `enabled:` flags in strategies.yaml, a supervised restart resumes trading automatically. Consider a `WatchdogSec`/heartbeat later. Note WSL2 specifics: systemd user units require systemd enabled in wsl.conf.
+
+---
+
+### FABLE-016: Dash DataTable deprecation — dashboard tables need eventual migration to dash-ag-grid
+- **Status**: Open
+- **Severity**: LOW
+- **Category**: Maintenance / Dependency
+- **File(s)**: `src/dashboard/components.py` (all three `dash_table.DataTable` usages)
+- **Discovered**: 2026-06-10
+- **Discovered By**: pytest DeprecationWarning during FABLE-012 work
+
+**Description**:
+Dash 4.0 emits: "The dash_table.DataTable will be removed from the builtin dash components in a future major version. We recommend using dash-ag-grid." The positions, trade-history, and performance-stats tables all use DataTable. No functional impact today; a future `pip install -U dash` across a major version will break the dashboard.
+
+**Fix Suggestion**:
+No action until a Dash major-version bump is planned. When migrating: `pip install dash[ag-grid]`, replace the three table builders with `dash_ag_grid.AgGrid` (columnDefs/rowData mapping is mechanical; conditional row styling moves to `getRowStyle`). Pin `dash<5` in pyproject until then.
 
 ---
 
