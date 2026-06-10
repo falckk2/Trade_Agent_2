@@ -1,9 +1,11 @@
 from src.core.enums import AggregationMode
 from src.strategies.composite import CompositeStrategy
+from src.strategies.ema_ribbon import EMARibbonStrategy
 from src.strategies.interface import IStrategy
 from src.strategies.ping_pong import PingPongStrategy
 from src.strategies.rsi_strategy import RSIStrategy
 from src.strategies.sma_crossover import SMACrossoverStrategy
+from src.strategies.wavetrend import WaveTrendStrategy
 
 
 # Registry of built-in strategy types
@@ -11,6 +13,8 @@ _STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "sma_crossover": SMACrossoverStrategy,
     "rsi": RSIStrategy,
     "ping_pong": PingPongStrategy,
+    "wavetrend": WaveTrendStrategy,
+    "ema_ribbon": EMARibbonStrategy,
 }
 
 

@@ -7,9 +7,10 @@ This register tracks architectural and structural issues found during a full-cod
 Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplicated here. FABLE-002 is likely a contributing cause of ISSUE-043's reconnect storms — resolve them together.
 
 ## Summary
-- Total Issues: 16
-- Critical: 1 | High: 3 | Medium: 8 | Low: 4
-- Open: 2 (FABLE-015 supervision, FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 10 | Fix Failed: 0 | Resolved: 4
+- Total Issues: 18
+- Critical: 1 | High: 3 | Medium: 9 | Low: 5
+- Open: 3 (FABLE-015 supervision, FABLE-016 Dash deprecation, FABLE-017 TradingView webhook) | Investigating: 0 | Fix Attempted: 11 | Fix Failed: 0 | Resolved: 4
+- _Fifth pass 2026-06-10 (late evening): FABLE-017/018 filed from user request. FABLE-018 partially built same day (equity-curve persistence + live-vs-backtest performance report). Two MarketCipher-inspired strategies implemented natively (`wavetrend`, `ema_ribbon`), tested (13 new tests), backtested — both DISABLED in config: WaveTrend overfits in-sample on 4H (IS PF up to 3.4, OOS PF 0.3-0.45), ema_ribbon inconsistent across windows. pytest → 412 passed, 8 skipped._
 - _2026-06-10 (fourth pass): FABLE-014/015/016 filed from operational review. FABLE-014 fixed same day (`enabled:` flag in strategies.yaml + `register_strategies()`); both SMA strategies enabled and a long-running demo trial launched on the 1H config. FABLE-015 (systemd unit) and FABLE-016 (dash-ag-grid migration) remain open by choice — small, well-scoped tasks._
 - _Third pass 2026-06-10 (evening): ISSUE-040/042/043 in issues.md resolved (043 root cause: server requires client pings every ~30s and inbound data does not reset the timer — fixed with fixed 15s ping cadence, verified by 10-min soak: 1 reconnect vs ~16 expected). FABLE-002 promoted to Resolved with corrected attribution. pytest → 395 passed, 8 skipped._
 - _Verification pass 2026-06-10 (later same day): FABLE-001 RESOLVED via live demo trade (TP/SL trigger registered on exchange with exact submitted prices; BloFin auto-cancels attached TP/SL on position close — `scripts/verify_tpsl_demo.py`). FABLE-003 RESOLVED via observed clean SIGTERM shutdown + unit coverage. FABLE-013 (new: fetch script single-page incremental bug) found, fixed, and verified — all historical data now continuous through 2026-06-10. Parameter sweep (`scripts/tune_strategies.py`) drove config changes: timeframe 5m → 1H, ETH SMA 10/30 → 5/30, RSI strategies removed (net-negative across the entire grid). See FABLE-010 fix history for numbers._
@@ -375,6 +376,42 @@ Dash 4.0 emits: "The dash_table.DataTable will be removed from the builtin dash 
 
 **Fix Suggestion**:
 No action until a Dash major-version bump is planned. When migrating: `pip install dash[ag-grid]`, replace the three table builders with `dash_ag_grid.AgGrid` (columnDefs/rowData mapping is mechanical; conditional row styling moves to `getRowStyle`). Pin `dash<5` in pyproject until then.
+
+---
+
+### FABLE-017: TradingView/MarketCipher integration — webhook signal bridge
+- **Status**: Open
+- **Severity**: LOW (enhancement)
+- **Category**: Enhancement / Integration
+- **File(s)**: new (suggest `src/strategies/webhook_strategy.py` + a small HTTP receiver)
+- **Discovered**: 2026-06-10
+- **Discovered By**: user request — TradingView subscription + MarketCipher available
+
+**Description**:
+The user has a TradingView subscription with the MarketCipher indicator suite. TradingView exposes no API to read indicator values programmatically; the only supported integration is **alert webhooks**: a TradingView alert on a MarketCipher condition (e.g. "MC-B green dot") POSTs JSON to a configured URL, which the bot would consume as a Signal.
+
+Groundwork already done (2026-06-10): MarketCipher's cores are reimplemented natively and registered in the factory — `wavetrend` (MC-B's WaveTrend oscillator) and `ema_ribbon` (MC-A's ribbon cross) — fully backtestable with the local engine (see strategies.yaml for current evidence; both disabled). The webhook bridge adds the *actual* MarketCipher signals (divergences, money flow, green/red dots) that the native versions don't replicate.
+
+**Fix Suggestion**:
+1. `WebhookSignalStrategy(IStrategy)`: holds the last signal received per symbol; `analyze()` returns and clears it (or returns HOLD).
+2. Small aiohttp endpoint (e.g. `POST /webhook/tradingview` on a configurable port, shared-secret token in the path or body) that validates payload `{symbol, action: long|short|close, strength?}` and feeds the strategy via the EventBus.
+3. **Infrastructure prerequisite (user decision)**: TradingView must reach the endpoint — requires a public URL (cloudflared/ngrok tunnel from WSL, or a VPS). Note: webhook signals cannot be backtested — treat them as a live-only strategy and size accordingly.
+
+---
+
+### FABLE-018: Performance recording incomplete — no durable equity curve, no live-vs-backtest feedback loop
+- **Status**: Fix Attempted
+- **Severity**: MEDIUM
+- **Category**: Enhancement / Operations
+- **File(s)**: `src/portfolio/manager.py`, `scripts/performance_report.py` (new)
+- **Discovered**: 2026-06-10
+- **Discovered By**: user request — "are we recording their performance? we want the agents to be learning and improving"
+
+**Description**:
+Trades were durably recorded (FABLE-004) and stats computable (FABLE-012), but: (1) the equity curve lived only in memory — lost on restart; (2) nothing compared live results against backtest expectation, so there was no systematic signal for retuning or disabling a strategy. "Learning" requires measurement → comparison → action.
+
+**Fix History**:
+- **[2026-06-10] Fix attempted by Fable 5**: (1) `PortfolioManager._append_snapshot_to_csv` appends one row per tick to `data/equity_curve.csv` (timestamp, equity, unrealized, realized, open positions) — crash-safe, ~1 MB/month. (2) New `scripts/performance_report.py`: per-strategy live stats (all time / 30d / 7d) printed beside a backtest of the same params over the same trailing window — divergence between live and sim is the action signal (live ≪ sim → execution problem; both negative → retune via `scripts/tune_strategies.py` or disable). Verified working against current data: correctly shows the pre-fix-era live losses, sim-positive trailing-30d for both enabled SMAs, and sim-negative for the (disabled) wavetrend. **Remaining work**: schedule the report periodically (cron/`/schedule` routine that runs it and acts on divergence — the "improving" half of the loop); consider auto-archiving trade_history from the broken pre-2026-06-10 era so live stats reflect only post-fix execution.
 
 ---
 

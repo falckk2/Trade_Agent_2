@@ -53,6 +53,7 @@ class TestPingPongAbsentFromYaml:
         assert "sma_crossover_btc" in names
         assert "sma_crossover_eth" in names
 
-    def test_strategy_count_is_two(self, strategies_list):
-        """Exactly 2 production strategies should be configured (1 BTC, 1 ETH)."""
-        assert len(strategies_list) == 2
+    def test_strategy_count_is_four(self, strategies_list):
+        """4 configured strategies: 2 SMA (enabled) + 2 MarketCipher-style
+        (wavetrend, ema_ribbon — registered but disabled pending evidence)."""
+        assert len(strategies_list) == 4

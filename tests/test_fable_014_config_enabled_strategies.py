@@ -58,10 +58,12 @@ class TestRegisterStrategies:
 
 class TestProductionConfig:
     def test_production_strategies_are_enabled_for_trial(self):
-        """Demo trial config (2026-06-10): both SMA strategies start enabled."""
+        """Demo trial config (2026-06-10): the two SMA strategies start
+        enabled; the MarketCipher-style strategies stay disabled pending
+        positive in+out-of-sample backtest evidence."""
         with open(Path(__file__).parent.parent / "config" / "strategies.yaml") as f:
-            entries = yaml.safe_load(f)["strategies"]
-        assert all(e.get("enabled") is True for e in entries), (
-            "Trial config expects both strategies enabled at startup; "
-            "update this test if the roster's enablement policy changes"
-        )
+            entries = {e["name"]: e for e in yaml.safe_load(f)["strategies"]}
+        assert entries["sma_crossover_btc"].get("enabled") is True
+        assert entries["sma_crossover_eth"].get("enabled") is True
+        assert entries["wavetrend_btc"].get("enabled") is False
+        assert entries["ema_ribbon_btc"].get("enabled") is False

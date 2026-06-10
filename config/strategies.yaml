@@ -33,6 +33,37 @@ strategies:
     symbols:
       - "ETH-USDT"
 
+  # MarketCipher-inspired strategies (added 2026-06-10, DISABLED pending
+  # better evidence). Backtest verdicts on the Jan-Apr/May-Jun split:
+  # - wavetrend (MC-B core): 4H in-sample PF 1.2-3.4 but out-of-sample
+  #   collapse (PF 0.3-0.45) — regime-dependent, do not trade yet
+  # - ema_ribbon (MC-A core): BTC 1H IS +$4.99/PF 1.39 but OOS -$1.77 —
+  #   inconsistent across windows
+  # Registered so they appear in the dashboard and performance reports;
+  # flip `enabled` only after a profitable IS+OOS result.
+  - name: wavetrend_btc
+    type: wavetrend
+    weight: 1.0
+    enabled: false
+    params:
+      channel_length: 10
+      average_length: 21
+      overbought: 53
+      oversold: -53
+    symbols:
+      - "BTC-USDT"
+
+  - name: ema_ribbon_btc
+    type: ema_ribbon
+    weight: 1.0
+    enabled: false
+    params:
+      fast_period: 8
+      mid_period: 21
+      slow_period: 55
+    symbols:
+      - "BTC-USDT"
+
   # RSI strategies removed 2026-06-10: net-negative across the entire
   # parameter grid (period 7/14/21 x levels 70/30, 75/25, 80/20) on both
   # symbols and both timeframes tested. On 1H the losses were severe

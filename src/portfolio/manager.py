@@ -130,6 +130,10 @@ class PortfolioManager(IPortfolioManager):
             if len(self._snapshots) > 10000:
                 self._snapshots = self._snapshots[-10000:]
 
+            # Durable equity record for offline performance analysis
+            # (FABLE-018) — the in-memory list above dies with the process.
+            self._append_snapshot_to_csv(snapshot)
+
     def get_snapshot(self) -> PortfolioSnapshot:
         with self._lock:
             if self._snapshots:
@@ -437,6 +441,33 @@ class PortfolioManager(IPortfolioManager):
             "Trade closed: %s %s gross_pnl=%.4f fee=%.6f net_pnl=%.4f",
             position.symbol, position.side.value, pnl, total_fee, net_pnl,
         )
+
+    def _append_snapshot_to_csv(self, snapshot: PortfolioSnapshot) -> None:
+        """Append one equity-curve row to equity_curve.csv (crash-safe record).
+
+        One row per engine tick (~30s) is ~1 MB/month — cheap insurance for
+        performance analysis across restarts. I/O failures are logged and
+        never abort the update.
+        """
+        filepath = self._data_dir / "equity_curve.csv"
+        try:
+            write_header = not filepath.exists()
+            with open(filepath, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(
+                        ["timestamp", "total_equity", "unrealized_pnl",
+                         "realized_pnl", "open_positions"]
+                    )
+                writer.writerow([
+                    snapshot.timestamp.isoformat(),
+                    snapshot.total_equity,
+                    snapshot.unrealized_pnl,
+                    snapshot.realized_pnl,
+                    len(snapshot.positions),
+                ])
+        except Exception:
+            logger.exception("Failed to append equity snapshot to %s", filepath)
 
     def _append_trade_to_csv(self, trade: TradeRecord) -> None:
         """Append a single trade to trade_history.csv (crash-safe persistence).
