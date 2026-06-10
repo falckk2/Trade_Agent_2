@@ -48,6 +48,8 @@ class TestExecuteSignal:
             order_type=OrderType.MARKET,
             quantity=0.1,
             price=None,
+            stop_loss=None,
+            take_profit=None,
         )
         assert order.id == "ord_123"
 
@@ -60,6 +62,8 @@ class TestExecuteSignal:
             order_type=OrderType.MARKET,
             quantity=1.0,
             price=None,
+            stop_loss=None,
+            take_profit=None,
         )
 
     @pytest.mark.asyncio
@@ -80,6 +84,8 @@ class TestExecuteSignal:
             order_type=OrderType.LIMIT,
             quantity=0.1,
             price=49000.0,
+            stop_loss=None,
+            take_profit=None,
         )
 
     @pytest.mark.asyncio

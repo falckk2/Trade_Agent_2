@@ -10,8 +10,25 @@ from src.core.enums import EventType, PositionStatus, Side
 from src.core.events import Event, EventBus
 from src.core.models import PortfolioSnapshot, Position, TradeRecord
 from src.portfolio.interface import IPortfolioManager
+from src.portfolio.stats import compute_performance_stats
 
 logger = logging.getLogger(__name__)
+
+_CSV_HEADER = [
+    "id", "symbol", "side", "entry_price", "exit_price",
+    "quantity", "pnl", "fee", "strategy_name", "opened_at",
+    "closed_at", "duration_seconds",
+]
+
+
+def _trade_row(t: TradeRecord) -> list:
+    return [
+        t.id, t.symbol, t.side.value, t.entry_price,
+        t.exit_price, t.quantity, t.pnl, t.fee,
+        t.strategy_name or "",
+        t.opened_at.isoformat(), t.closed_at.isoformat(),
+        t.duration_seconds,
+    ]
 
 
 class PortfolioManager(IPortfolioManager):
@@ -46,6 +63,11 @@ class PortfolioManager(IPortfolioManager):
         self._pending_fees: dict[tuple[str, Side], collections.deque[float]] = (
             collections.defaultdict(collections.deque)
         )
+        # FABLE-006: close fills carry the Position in the ORDER_FILLED payload,
+        # so they can be matched by position id instead of positionally.
+        # position_id -> (exit_price, exit_fee). The (symbol, side) queues
+        # remain as fallback for fills without a position (entries, flips).
+        self._pending_close_fills: dict[str, tuple[float, float]] = {}
 
         # Tracks the cumulative realized_pnl already recorded for each position.
         # Used to compute the *incremental* realized PnL on each flip so that
@@ -146,6 +168,20 @@ class PortfolioManager(IPortfolioManager):
                     names.add(p.strategy_name)
             return sorted(names)
 
+    def get_performance_stats(self, strategy_name: str | None = None) -> dict:
+        """Compute performance statistics from recorded trades (FABLE-012).
+
+        Delegates to compute_performance_stats — the same function the
+        backtester uses (FABLE-010) — so live and backtest numbers are
+        directly comparable.
+        """
+        with self._lock:
+            trades = [
+                t for t in self._trade_history
+                if strategy_name is None or t.strategy_name == strategy_name
+            ]
+        return compute_performance_stats(trades)
+
     def save_trade_history(self) -> None:
         filepath = self._data_dir / "trade_history.csv"
         # Write to a temp file first, then atomically replace the real file so
@@ -154,22 +190,22 @@ class PortfolioManager(IPortfolioManager):
         tmp_path = filepath.with_suffix(".csv.tmp")
         with self._lock:
             trades_snapshot = list(self._trade_history)
+            # Leftover cached fills mean a fill was never matched to a trade —
+            # surface it so queue drift is visible instead of silent (FABLE-006).
+            leftover = sum(len(q) for q in self._pending_fill_prices.values())
+            leftover += len(self._pending_close_fills)
+            if leftover:
+                logger.warning(
+                    "%d cached fill(s) were never matched to a recorded trade — "
+                    "price/fee attribution may have drifted this session (FABLE-006)",
+                    leftover,
+                )
         try:
             with open(tmp_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow([
-                    "id", "symbol", "side", "entry_price", "exit_price",
-                    "quantity", "pnl", "fee", "strategy_name", "opened_at",
-                    "closed_at", "duration_seconds",
-                ])
+                writer.writerow(_CSV_HEADER)
                 for t in trades_snapshot:
-                    writer.writerow([
-                        t.id, t.symbol, t.side.value, t.entry_price,
-                        t.exit_price, t.quantity, t.pnl, t.fee,
-                        t.strategy_name or "",
-                        t.opened_at.isoformat(), t.closed_at.isoformat(),
-                        t.duration_seconds,
-                    ])
+                    writer.writerow(_trade_row(t))
             os.replace(tmp_path, filepath)
             logger.info("Saved %d trades to %s", len(trades_snapshot), filepath)
         except Exception:
@@ -242,20 +278,43 @@ class PortfolioManager(IPortfolioManager):
         other.  _record_trade pops the oldest price from the front of the queue.
         """
         order = event.payload.get("order")
-        if order and order.average_fill_price is not None:
-            with self._lock:
-                key = (order.symbol, order.side)
-                self._pending_fill_prices[key].append(order.average_fill_price)
-                self._pending_fees[key].append(order.fee)
-                logger.debug(
-                    "_on_order_filled queued price=%.4f fee=%.6f for key=(%s, %s) "
-                    "(queue depth=%d)",
+        if not (order and order.average_fill_price is not None):
+            return
+        position = event.payload.get("position")
+        with self._lock:
+            if position is not None and position.id:
+                # Close fill — match by position identity (FABLE-006), so a
+                # missed or extra fill on the same symbol/side can never shift
+                # this price/fee onto the wrong trade.
+                self._pending_close_fills[position.id] = (
                     order.average_fill_price,
                     order.fee,
-                    order.symbol,
-                    order.side.value,
-                    len(self._pending_fill_prices[key]),
                 )
+                logger.debug(
+                    "_on_order_filled cached close fill price=%.4f fee=%.6f "
+                    "for position %s",
+                    order.average_fill_price, order.fee, position.id,
+                )
+                return
+            key = (order.symbol, order.side)
+            self._pending_fill_prices[key].append(order.average_fill_price)
+            self._pending_fees[key].append(order.fee)
+            depth = len(self._pending_fill_prices[key])
+            if depth > 4:
+                logger.warning(
+                    "_on_order_filled: fill queue for (%s, %s) has depth %d — "
+                    "possible unmatched fills drifting (FABLE-006)",
+                    order.symbol, order.side.value, depth,
+                )
+            logger.debug(
+                "_on_order_filled queued price=%.4f fee=%.6f for key=(%s, %s) "
+                "(queue depth=%d)",
+                order.average_fill_price,
+                order.fee,
+                order.symbol,
+                order.side.value,
+                depth,
+            )
 
     def _record_trade(
         self,
@@ -319,22 +378,29 @@ class PortfolioManager(IPortfolioManager):
         close_key = (position.symbol, close_side)
         open_key = (position.symbol, position.side)
 
-        price_queue = self._pending_fill_prices.get(close_key)
-        if price_queue:
-            exit_price = price_queue.popleft()
-            if not price_queue:
-                del self._pending_fill_prices[close_key]
-        else:
-            exit_price = position.current_price
-
-        # Deduct exchange fees from net P&L (entry fee + exit fee).
-        # Fees are cached on ORDER_FILLED events — if unavailable default to 0.
+        # Prefer the identity-matched close fill (FABLE-006); fall back to the
+        # positional (symbol, side) queue for fills that had no position
+        # attached (flips arrive as entry orders for the opposite side).
         exit_fee = 0.0
-        fee_queue = self._pending_fees.get(close_key)
-        if fee_queue:
-            exit_fee = fee_queue.popleft()
-            if not fee_queue:
-                del self._pending_fees[close_key]
+        close_fill = self._pending_close_fills.pop(position.id, None) if position.id else None
+        if close_fill is not None:
+            exit_price, exit_fee = close_fill
+        else:
+            price_queue = self._pending_fill_prices.get(close_key)
+            if price_queue:
+                exit_price = price_queue.popleft()
+                if not price_queue:
+                    del self._pending_fill_prices[close_key]
+            else:
+                exit_price = position.current_price
+
+            # Deduct exchange fees from net P&L (entry fee + exit fee).
+            # Fees are cached on ORDER_FILLED events — if unavailable default to 0.
+            fee_queue = self._pending_fees.get(close_key)
+            if fee_queue:
+                exit_fee = fee_queue.popleft()
+                if not fee_queue:
+                    del self._pending_fees[close_key]
 
         entry_fee = 0.0
         fee_queue = self._pending_fees.get(open_key)
@@ -364,10 +430,32 @@ class PortfolioManager(IPortfolioManager):
         self._strategy_realized_pnl[strategy_name] = (
             self._strategy_realized_pnl.get(strategy_name, 0.0) + net_pnl
         )
+        # Persist immediately (FABLE-004): a crash must not lose the session's
+        # trades — _load_trade_history rebuilds realized P&L from this file.
+        self._append_trade_to_csv(trade)
         logger.info(
             "Trade closed: %s %s gross_pnl=%.4f fee=%.6f net_pnl=%.4f",
             position.symbol, position.side.value, pnl, total_fee, net_pnl,
         )
+
+    def _append_trade_to_csv(self, trade: TradeRecord) -> None:
+        """Append a single trade to trade_history.csv (crash-safe persistence).
+
+        save_trade_history() still does an atomic full rewrite at shutdown,
+        which compacts/normalizes the file; this append only protects trades
+        recorded between startup and an unclean exit. I/O failures are logged
+        and never abort trade recording.
+        """
+        filepath = self._data_dir / "trade_history.csv"
+        try:
+            write_header = not filepath.exists()
+            with open(filepath, "a", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                if write_header:
+                    writer.writerow(_CSV_HEADER)
+                writer.writerow(_trade_row(trade))
+        except Exception:
+            logger.exception("Failed to append trade to %s", filepath)
 
     def _build_snapshot(self) -> PortfolioSnapshot:
         total_equity = self._balance.get("total_equity", 0.0)

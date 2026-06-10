@@ -9,7 +9,12 @@ class IOrderExecutor(ABC):
 
     @abstractmethod
     async def execute_signal(
-        self, signal: Signal, quantity: float, symbol: str
+        self,
+        signal: Signal,
+        quantity: float,
+        symbol: str,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
     ) -> Order:
         ...
 

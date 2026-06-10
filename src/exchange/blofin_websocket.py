@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import time
+from collections import deque
 from datetime import datetime, timezone
 
 import aiohttp
@@ -32,6 +34,13 @@ class BloFinWebSocket:
         self._session: aiohttp.ClientSession | None = None
         self._running = False
         self._subscriptions: list[dict] = []
+        # FABLE-011: reconnect-storm detection — alert when reconnects pile up
+        # within a window, at most once per window so the alert itself
+        # cannot spam.
+        self._reconnect_times: deque[float] = deque(maxlen=20)
+        self._storm_threshold = 5
+        self._storm_window_seconds = 600.0
+        self._last_storm_alert = 0.0
 
     @property
     def _url(self) -> str:
@@ -108,10 +117,38 @@ class BloFinWebSocket:
                 for sub in self._subscriptions:
                     await self._ws.send_json(sub)
                 logger.info("WebSocket reconnected after %d attempt(s)", attempt)
+                await self._check_reconnect_storm()
                 return
             except Exception:
                 logger.exception("Reconnection attempt %d failed", attempt)
                 delay = min(delay * 2, max_delay)
+
+    async def _check_reconnect_storm(self) -> None:
+        """Alert when reconnects exceed the threshold within the window (FABLE-011)."""
+        now = time.monotonic()
+        self._reconnect_times.append(now)
+        recent = [
+            t for t in self._reconnect_times
+            if now - t <= self._storm_window_seconds
+        ]
+        if (
+            len(recent) >= self._storm_threshold
+            and now - self._last_storm_alert > self._storm_window_seconds
+        ):
+            self._last_storm_alert = now
+            await self._event_bus.publish(
+                Event(
+                    event_type=EventType.ALERT,
+                    payload={
+                        "level": "warning",
+                        "message": (
+                            f"WebSocket reconnect storm: {len(recent)} reconnects "
+                            f"in the last {int(self._storm_window_seconds / 60)} min — "
+                            f"candle feed is unstable (see ISSUE-043)."
+                        ),
+                    },
+                )
+            )
 
     async def _handle_message(self, data: dict) -> None:
         # Heartbeat pong — acknowledge and return

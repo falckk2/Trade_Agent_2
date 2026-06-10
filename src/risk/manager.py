@@ -2,7 +2,8 @@ import json
 import logging
 from pathlib import Path
 
-from src.core.enums import Side, SignalType
+from src.core.enums import EventType, Side, SignalType
+from src.core.events import Event, EventBus
 from src.core.models import PortfolioSnapshot, Position, Signal
 from src.risk.interface import IRiskManager
 
@@ -21,6 +22,7 @@ class RiskManager(IRiskManager):
         default_take_profit_pct: float = 0.04,
         min_signal_strength: float = 0.3,
         baseline_file: Path | None = None,
+        event_bus: EventBus | None = None,
     ) -> None:
         self._max_position_pct = max_position_pct
         self._max_exposure_pct = max_exposure_pct
@@ -29,18 +31,28 @@ class RiskManager(IRiskManager):
         self._default_take_profit_pct = default_take_profit_pct
         self._min_signal_strength = min_signal_strength
         self._baseline_file = baseline_file
-        self._initial_equity: float | None = self._load_baseline()
+        self._event_bus = event_bus
+        # FABLE-011: alert once per halt onset, not on every rejected signal
+        self._drawdown_alerted = False
+        # FABLE-007: drawdown is measured from a trailing high-watermark, not
+        # a fixed initial equity — otherwise the halt threshold decays as the
+        # account grows (10% of the original baseline can be a tiny fraction
+        # of current equity after profits).
+        self._peak_equity: float | None = self._load_baseline()
 
     def _load_baseline(self) -> float | None:
-        """Load persisted initial equity from disk, if available."""
+        """Load the persisted equity high-watermark from disk, if available."""
         if self._baseline_file is None:
             return None
         try:
             if self._baseline_file.exists():
                 data = json.loads(self._baseline_file.read_text())
-                equity = float(data["initial_equity"])
+                # Legacy key from the fixed-baseline era (ISSUE-034) is
+                # accepted as the starting peak.
+                raw = data.get("peak_equity", data.get("initial_equity"))
+                equity = float(raw)
                 logger.info(
-                    "Drawdown baseline loaded from %s: $%.2f",
+                    "Drawdown high-watermark loaded from %s: $%.2f",
                     self._baseline_file, equity,
                 )
                 return equity
@@ -49,29 +61,31 @@ class RiskManager(IRiskManager):
         return None
 
     def _save_baseline(self) -> None:
-        """Persist initial equity to disk so drawdown survives restarts."""
-        if self._baseline_file is None or self._initial_equity is None:
+        """Persist the equity high-watermark so drawdown survives restarts."""
+        if self._baseline_file is None or self._peak_equity is None:
             return
         try:
             self._baseline_file.parent.mkdir(parents=True, exist_ok=True)
             self._baseline_file.write_text(
-                json.dumps({"initial_equity": self._initial_equity})
+                json.dumps({"peak_equity": self._peak_equity})
             )
         except Exception:
             logger.exception("Failed to save drawdown baseline to %s", self._baseline_file)
 
     def set_initial_equity(self, equity: float) -> None:
-        """Explicitly set the baseline equity for drawdown calculation.
+        """Seed the drawdown high-watermark with the opening balance.
 
-        Call this once at startup with the opening balance so the drawdown
-        window starts from the correct value rather than the first signal.
-        Only takes effect if no baseline is already set (persisted or in-memory).
-        Delete the baseline file to reset the drawdown window deliberately.
+        Call this once at startup. Only takes effect if no peak is already
+        known (persisted or in-memory); the peak then ratchets up on its own
+        as equity grows. Delete the baseline file to reset deliberately.
+        External deposits/withdrawals are not detected — after a transfer,
+        delete the baseline file so the watermark restarts from the new
+        balance.
         """
-        if self._initial_equity is None:
-            self._initial_equity = equity
+        if self._peak_equity is None:
+            self._peak_equity = equity
             self._save_baseline()
-            logger.info("Drawdown baseline set to $%.2f", equity)
+            logger.info("Drawdown high-watermark seeded at $%.2f", equity)
 
     def validate_signal(
         self, signal: Signal, portfolio: PortfolioSnapshot
@@ -91,21 +105,35 @@ class RiskManager(IRiskManager):
             )
             return False
 
-        # Track initial equity for drawdown check
-        if self._initial_equity is None:
-            self._initial_equity = portfolio.total_equity
+        # Track the equity high-watermark for the drawdown check
+        if self._peak_equity is None:
+            self._peak_equity = portfolio.total_equity
+            self._save_baseline()
+        elif portfolio.total_equity > self._peak_equity:
+            self._peak_equity = portfolio.total_equity
+            self._save_baseline()
 
-        # Check max drawdown
-        if self._initial_equity > 0:
+        # Check max drawdown from the peak
+        if self._peak_equity > 0:
             drawdown = (
-                self._initial_equity - portfolio.total_equity
-            ) / self._initial_equity
+                self._peak_equity - portfolio.total_equity
+            ) / self._peak_equity
             if drawdown >= self._max_drawdown_pct:
                 logger.warning(
-                    "Max drawdown reached (%.2f%%), rejecting signal",
+                    "Max drawdown reached (%.2f%% from peak $%.2f), rejecting signal",
                     drawdown * 100,
+                    self._peak_equity,
                 )
+                if not self._drawdown_alerted:
+                    self._drawdown_alerted = True
+                    self._alert(
+                        "critical",
+                        f"Max drawdown halt: equity ${portfolio.total_equity:,.2f} "
+                        f"is {drawdown * 100:.1f}% below peak ${self._peak_equity:,.2f}. "
+                        f"New signals are rejected; open positions remain live.",
+                    )
                 return False
+            self._drawdown_alerted = False
 
         # Check total exposure including the projected new position
         total_exposure = sum(
@@ -132,6 +160,14 @@ class RiskManager(IRiskManager):
                 return False
 
         return True
+
+    def _alert(self, level: str, message: str) -> None:
+        """Publish an ALERT event (sync context — validate_signal is sync)."""
+        if self._event_bus is None:
+            return
+        self._event_bus.publish_sync(
+            Event(event_type=EventType.ALERT, payload={"level": level, "message": message})
+        )
 
     def calculate_position_size(
         self,

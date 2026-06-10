@@ -73,6 +73,13 @@ class TradingEngine:
         # Last composite signal per symbol (set when >1 strategies cover a symbol)
         self._last_composite_signals: dict[str, Signal] = {}
 
+        # Shutdown coordination (FABLE-003): stop() must not run cleanup while
+        # a tick is still in flight. start() owns the full lifecycle — cleanup
+        # runs after the loop exits — and _drained signals completion to stop().
+        self._stop_requested: asyncio.Event | None = None
+        self._drained: asyncio.Event | None = None
+        self._close_positions_on_stop = True
+
     def add_strategy(
         self,
         strategy: IStrategy,
@@ -133,34 +140,71 @@ class TradingEngine:
         logger.info("Trading engine starting...")
         await self._exchange.connect()
         self._running = True
+        self._stop_requested = asyncio.Event()
+        self._drained = asyncio.Event()
+        self._close_positions_on_stop = True
 
-        # Initial portfolio update — use opening balance as drawdown baseline
-        await self._update_portfolio()
-        opening_equity = self._portfolio_manager.get_snapshot().total_equity
-        self._risk_manager.set_initial_equity(opening_equity)
+        try:
+            # Initial portfolio update — use opening balance as drawdown baseline
+            await self._update_portfolio()
+            opening_equity = self._portfolio_manager.get_snapshot().total_equity
+            self._risk_manager.set_initial_equity(opening_equity)
 
-        logger.info(
-            "Trading engine running. %d strategies, %d symbols, %.0fs interval",
-            len(self._strategies),
-            len(self._symbols),
-            interval_seconds,
-        )
+            logger.info(
+                "Trading engine running. %d strategies, %d symbols, %.0fs interval",
+                len(self._strategies),
+                len(self._symbols),
+                interval_seconds,
+            )
 
-        while self._running:
+            while self._running:
+                try:
+                    await self._tick()
+                except Exception:
+                    logger.exception("Error in trading tick")
+                if not self._running:
+                    break
+                # Interruptible sleep: stop() sets _stop_requested so shutdown
+                # does not wait out the remainder of the interval.
+                try:
+                    await asyncio.wait_for(
+                        self._stop_requested.wait(), timeout=interval_seconds
+                    )
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            # Cleanup runs here — strictly after the last tick has finished —
+            # so a tick in flight can never place an order after positions
+            # were closed (FABLE-003).
+            self._running = False
             try:
-                await self._tick()
-            except Exception:
-                logger.exception("Error in trading tick")
-            await asyncio.sleep(interval_seconds)
+                await self._shutdown_cleanup(self._close_positions_on_stop)
+            finally:
+                self._drained.set()
 
     async def stop(self, close_positions: bool = True) -> None:
+        """Request shutdown and wait until the engine has fully drained.
+
+        Returns only after the in-flight tick (if any) finished, positions
+        were closed, the exchange disconnected, and trade history was saved.
+        """
         logger.info("Trading engine stopping...")
+        self._close_positions_on_stop = close_positions
         self._running = False
+        if self._stop_requested is not None:
+            self._stop_requested.set()
+        if self._drained is not None:
+            await self._drained.wait()
+        else:
+            # start() never ran — no loop to drain; clean up directly.
+            await self._shutdown_cleanup(close_positions)
+        logger.info("Trading engine stopped")
+
+    async def _shutdown_cleanup(self, close_positions: bool) -> None:
         if close_positions:
             await self.close_all_positions()
         await self._exchange.disconnect()
         self._portfolio_manager.save_trade_history()
-        logger.info("Trading engine stopped")
 
     async def close_all_positions(self) -> None:
         """Market-close every open position and record the trades.
@@ -193,6 +237,19 @@ class TradingEngine:
                     "Failed to close %s %s on shutdown — manual close required",
                     position.symbol, position.side.value,
                 )
+                await self._event_bus.publish(
+                    Event(
+                        event_type=EventType.ALERT,
+                        payload={
+                            "level": "critical",
+                            "message": (
+                                f"Failed to close {position.symbol} "
+                                f"{position.side.value} qty={position.quantity:.4f} "
+                                f"on shutdown — MANUAL CLOSE REQUIRED on the exchange."
+                            ),
+                        },
+                    )
+                )
 
         # Force portfolio_manager to detect all closures and call _record_trade.
         # Passing an empty position list makes every position in _prev_positions
@@ -218,8 +275,13 @@ class TradingEngine:
     def strategies(self) -> list[IStrategy]:
         return list(self._strategies)
 
-    async def _check_exits(self, portfolio) -> None:
-        """Close positions that have hit their stop-loss or take-profit level."""
+    async def _check_exits(self, portfolio) -> int:
+        """Close positions that have hit their stop-loss or take-profit level.
+
+        Returns the number of positions closed so the caller can refresh the
+        portfolio snapshot before signal processing (FABLE-009).
+        """
+        closed = 0
         for position in portfolio.positions:
             stop_out = self._risk_manager.should_stop_out(position)
             take_profit = self._risk_manager.should_take_profit(position)
@@ -234,6 +296,8 @@ class TradingEngine:
                     position.current_price,
                 )
                 await self._order_executor.close_position(position)
+                closed += 1
+        return closed
 
     async def _tick(self) -> None:
         with self._strategy_lock:
@@ -244,7 +308,14 @@ class TradingEngine:
         await self._update_portfolio()
 
         # Exit positions that have breached stop-loss or take-profit before evaluating new signals
-        await self._check_exits(self._portfolio_manager.get_snapshot())
+        closed = await self._check_exits(self._portfolio_manager.get_snapshot())
+        if closed:
+            # Refresh so signal processing sees the post-exit state — otherwise
+            # the closed positions linger in the snapshot for the rest of the
+            # tick: duplicate-side checks block legitimate re-entries and CLOSE
+            # signals could re-close (i.e. reopen, in net mode) a dead position
+            # (FABLE-009).
+            await self._update_portfolio()
 
         # Group enabled strategies by symbol: symbol → [(strategy, weight), ...]
         symbol_strategies: dict[str, list[tuple[IStrategy, float]]] = defaultdict(list)
@@ -379,8 +450,18 @@ class TradingEngine:
             logger.info("Quantity is zero — skipping order")
             return
 
+        # Exchange-side protective exits (FABLE-001): computed from the current
+        # price (market orders fill near it) and attached to the entry order so
+        # the exchange enforces them even if the bot dies. _check_exits remains
+        # as a software backstop.
+        stop_loss = self._risk_manager.get_stop_loss(signal, current_price)
+        take_profit = self._risk_manager.get_take_profit(signal, current_price)
+
         # Execute
-        await self._order_executor.execute_signal(signal, quantity, symbol)
+        await self._order_executor.execute_signal(
+            signal, quantity, symbol,
+            stop_loss=stop_loss, take_profit=take_profit,
+        )
 
     async def _update_portfolio(self) -> None:
         positions = await self._exchange.get_positions()

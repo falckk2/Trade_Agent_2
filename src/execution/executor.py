@@ -28,7 +28,12 @@ class OrderExecutor(IOrderExecutor):
         self._fill_max_retries = fill_max_retries
 
     async def execute_signal(
-        self, signal: Signal, quantity: float, symbol: str
+        self,
+        signal: Signal,
+        quantity: float,
+        symbol: str,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
     ) -> Order:
         if signal.signal_type == SignalType.LONG:
             side = Side.BUY
@@ -42,13 +47,30 @@ class OrderExecutor(IOrderExecutor):
                 f"filtered by the caller before reaching execute_signal()."
             )
 
-        order = await self._exchange.place_order(
-            symbol=symbol,
-            side=side,
-            order_type=signal.order_type,
-            quantity=quantity,
-            price=signal.limit_price,
-        )
+        try:
+            order = await self._exchange.place_order(
+                symbol=symbol,
+                side=side,
+                order_type=signal.order_type,
+                quantity=quantity,
+                price=signal.limit_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+            )
+        except ValueError as exc:
+            # Expected skip (e.g. size below exchange minimum, FABLE-005) —
+            # not a fault. Return a FAILED order without publishing events.
+            logger.info("Order skipped for %s: %s", symbol, exc)
+            return Order(
+                id="",
+                symbol=symbol,
+                side=side,
+                order_type=signal.order_type,
+                quantity=quantity,
+                price=signal.limit_price,
+                status=OrderStatus.FAILED,
+                strategy_name=signal.strategy_name,
+            )
         order.strategy_name = signal.strategy_name
 
         await self._event_bus.publish(
@@ -132,6 +154,15 @@ class OrderExecutor(IOrderExecutor):
         )
 
         order = await self._await_fill(order, position.symbol)
+
+        # The closed position's attached TP/SL triggers are now orphaned —
+        # cancel them so they cannot fire and open an opposite position.
+        try:
+            await self._exchange.cancel_tpsl_orders(position.symbol)
+        except Exception:
+            logger.exception(
+                "Failed to cancel TP/SL orders for %s after close", position.symbol
+            )
 
         if order.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
             await self._event_bus.publish(

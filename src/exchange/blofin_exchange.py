@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import threading
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 
 import blofin.constants
 import blofin.utils
@@ -113,7 +115,7 @@ class BloFinExchange(IExchange):
             api_secret=self._secret,
             passphrase=self._passphrase,
         )
-        self._load_instrument_specs()
+        await asyncio.to_thread(self._load_instrument_specs)
         logger.info(
             "Connected to BloFin (%s mode)",
             "demo" if self._demo_mode else "live",
@@ -128,6 +130,7 @@ class BloFinExchange(IExchange):
                     "contract_value": float(inst.get("contractValue", 1)),
                     "lot_size": float(inst.get("lotSize", 1)),
                     "min_size": float(inst.get("minSize", 1)),
+                    "tick_size": float(inst.get("tickSize", 0)),
                 }
             logger.info("Loaded specs for %d instruments", len(self._instrument_specs))
         except Exception:
@@ -146,7 +149,26 @@ class BloFinExchange(IExchange):
         contracts = base_quantity / spec["contract_value"]
         lot = spec["lot_size"]
         rounded = round(round(contracts / lot) * lot, 10)
-        return max(rounded, spec["min_size"])
+        if rounded < spec["min_size"]:
+            # FABLE-005: never round UP to the exchange minimum — that would
+            # place a larger order than the risk manager approved. Skip instead.
+            logger.info(
+                "%s: %.10f contracts is below exchange minimum %s — skipping order",
+                symbol, rounded, spec["min_size"],
+            )
+            return 0.0
+        return rounded
+
+    def _round_to_tick(self, symbol: str, price: float) -> float:
+        """Round a price to the instrument's tick size (required for trigger prices)."""
+        tick = self._instrument_specs.get(symbol, {}).get("tick_size", 0)
+        if tick <= 0:
+            return price
+        # Decimal avoids float artifacts like 52000.100000000006 that the
+        # exchange would reject as an invalid trigger price.
+        tick_d = Decimal(str(tick))
+        steps = (Decimal(str(price)) / tick_d).to_integral_value(rounding=ROUND_HALF_UP)
+        return float(steps * tick_d)
 
     async def disconnect(self) -> None:
         global _active_instances
@@ -166,8 +188,19 @@ class BloFinExchange(IExchange):
             raise RuntimeError("Exchange not connected. Call connect() first.")
         return self._client
 
+    @staticmethod
+    async def _call(fn, *args, **kwargs):
+        """Run a synchronous SDK call in a worker thread (FABLE-002).
+
+        The blofin SDK is requests-based; calling it directly from async
+        methods blocks the event loop — stalling the WebSocket listener and
+        delaying heartbeat pings. requests without a shared Session is
+        thread-safe, so to_thread is sufficient.
+        """
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
     async def get_balance(self) -> dict[str, float]:
-        resp = self.client.account.get_balance(account_type="futures")
+        resp = await self._call(self.client.account.get_balance, account_type="futures")
         data = resp.get("data", [])
         if not data:
             logger.warning("get_balance returned empty data — total_equity will be 0")
@@ -195,6 +228,8 @@ class BloFinExchange(IExchange):
         order_type: OrderType,
         quantity: float,
         price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
     ) -> Order:
         order_price = price if price is not None else 0
         contracts = self._to_contracts(symbol, quantity)
@@ -203,11 +238,25 @@ class BloFinExchange(IExchange):
                 f"Cannot place order for {symbol}: contract size resolved to {contracts}. "
                 "Check that instrument specs loaded correctly."
             )
+
+        # Attach exchange-side TP/SL triggers so exits are enforced even when
+        # the bot is down (FABLE-001). Order price -1 = execute at market when
+        # the trigger fires (BloFin convention).
+        tpsl_kwargs: dict[str, str] = {}
+        if take_profit is not None:
+            tpsl_kwargs["tpTriggerPrice"] = str(self._round_to_tick(symbol, take_profit))
+            tpsl_kwargs["tpOrderPrice"] = "-1"
+        if stop_loss is not None:
+            tpsl_kwargs["slTriggerPrice"] = str(self._round_to_tick(symbol, stop_loss))
+            tpsl_kwargs["slOrderPrice"] = "-1"
+
         logger.info(
-            "Placing order: %s %s %.4f base → %.1f contracts",
+            "Placing order: %s %s %.4f base → %.1f contracts (sl=%s tp=%s)",
             _SIDE_MAP[side], symbol, quantity, contracts,
+            tpsl_kwargs.get("slTriggerPrice"), tpsl_kwargs.get("tpTriggerPrice"),
         )
-        resp = self.client.trading.place_order(
+        resp = await self._call(
+            self.client.trading.place_order,
             inst_id=symbol,
             margin_mode="cross",
             position_side="net",
@@ -215,6 +264,7 @@ class BloFinExchange(IExchange):
             order_type=_ORDER_TYPE_MAP.get(order_type, "market"),
             price=order_price,
             size=contracts,
+            **tpsl_kwargs,
         )
         logger.debug("place_order raw response for %s: %s", symbol, resp)
         data = resp.get("data", [{}])
@@ -239,16 +289,49 @@ class BloFinExchange(IExchange):
         )
 
     async def cancel_order(self, order_id: str, symbol: str) -> bool:
-        resp = self.client.trading.cancel_order(
-            inst_id=symbol, order_id=order_id
+        resp = await self._call(
+            self.client.trading.cancel_order, inst_id=symbol, order_id=order_id
         )
         data = resp.get("data", [{}])
         if isinstance(data, list) and data:
             return data[0].get("orderId", "") == order_id
         return False
 
+    async def cancel_tpsl_orders(self, symbol: str) -> int:
+        """Cancel all pending TP/SL trigger orders for a symbol.
+
+        Called after a position is closed by a regular order so the attached
+        TP/SL triggers cannot fire later and open an unintended opposite
+        position (net mode).
+        """
+        try:
+            resp = await self._call(
+                self.client.trading.get_active_tpsl_orders, inst_id=symbol
+            )
+        except Exception:
+            logger.exception("cancel_tpsl_orders: failed to list TP/SL orders for %s", symbol)
+            return 0
+        cancelled = 0
+        for item in resp.get("data", []):
+            tpsl_id = item.get("tpslId", "")
+            if not tpsl_id:
+                continue
+            try:
+                await self._call(
+                    self.client.trading.cancel_tpsl_order,
+                    inst_id=symbol, tpsl_id=tpsl_id,
+                )
+                cancelled += 1
+            except Exception:
+                logger.exception(
+                    "cancel_tpsl_orders: failed to cancel TP/SL %s for %s", tpsl_id, symbol
+                )
+        if cancelled:
+            logger.info("Cancelled %d leftover TP/SL order(s) for %s", cancelled, symbol)
+        return cancelled
+
     async def get_open_orders(self, symbol: str | None = None) -> list[Order]:
-        resp = self.client.trading.get_active_orders(inst_id=symbol)
+        resp = await self._call(self.client.trading.get_active_orders, inst_id=symbol)
         return [self._parse_order(item) for item in resp.get("data", [])]
 
     def _parse_order(self, item: dict) -> Order:
@@ -290,7 +373,9 @@ class BloFinExchange(IExchange):
         """
         # Fast path: still active
         try:
-            active_resp = self.client.trading.get_active_orders(inst_id=symbol)
+            active_resp = await self._call(
+                self.client.trading.get_active_orders, inst_id=symbol
+            )
             for item in active_resp.get("data", []):
                 if item.get("orderId") == order_id:
                     return self._parse_order(item)
@@ -299,8 +384,8 @@ class BloFinExchange(IExchange):
 
         # Slow path: already completed
         try:
-            history_resp = self.client.trading.get_order_history(
-                inst_id=symbol, limit=100
+            history_resp = await self._call(
+                self.client.trading.get_order_history, inst_id=symbol, limit=100
             )
             for item in history_resp.get("data", []):
                 if item.get("orderId") == order_id:
@@ -312,7 +397,7 @@ class BloFinExchange(IExchange):
         return None
 
     async def get_positions(self, symbol: str | None = None) -> list[Position]:
-        resp = self.client.trading.get_positions(inst_id=symbol)
+        resp = await self._call(self.client.trading.get_positions, inst_id=symbol)
         positions = []
         for item in resp.get("data", []):
             qty_contracts = float(item.get("positions", 0))
@@ -349,8 +434,8 @@ class BloFinExchange(IExchange):
         self, symbol: str, timeframe: TimeFrame, limit: int = 200
     ) -> list[Candle]:
         bar = _TIMEFRAME_MAP.get(timeframe, "5m")
-        resp = self.client.public.get_candlesticks(
-            inst_id=symbol, bar=bar, limit=limit
+        resp = await self._call(
+            self.client.public.get_candlesticks, inst_id=symbol, bar=bar, limit=limit
         )
         candles = []
         for item in resp.get("data", []):
@@ -369,7 +454,7 @@ class BloFinExchange(IExchange):
         return candles
 
     async def get_ticker(self, symbol: str) -> dict[str, float]:
-        resp = self.client.public.get_tickers(inst_id=symbol)
+        resp = await self._call(self.client.public.get_tickers, inst_id=symbol)
         data = resp.get("data", [])
         if not data:
             return {}

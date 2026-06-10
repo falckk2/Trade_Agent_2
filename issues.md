@@ -5,7 +5,8 @@ _Last updated: 2026-06-06_
 ## Summary
 - Total Issues: 43
 - Critical: 4 | High: 12 | Medium: 17 | Low: 10
-- Open: 4 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 39
+- Open: 3 | Investigating: 0 | Fix Attempted: 1 | Fix Failed: 0 | Resolved: 39
+- _2026-06-10: ISSUE-041 fixed by Fable 5 alongside dashboard work tracked in fable_issues.md (FABLE-012). ISSUE-040/042/043 remain open; note FABLE-002 (async SDK fix, see fable_issues.md) likely reduces ISSUE-043 reconnect frequency — re-measure on next live trial._
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
 - _Last verified by bug-hunter agent: 2026-05-16 (22/22 issue-resolver fixes Confirmed; 0 regressions)_
@@ -1839,7 +1840,7 @@ Apply the same `* contract_value` conversion to `quantity` in `_parse_order`, co
 ---
 
 ### ISSUE-041: Dashboard trade history table does not display the `fee` column
-- **Status**: Open
+- **Status**: Fix Attempted
 - **Severity**: LOW
 - **Category**: Configuration Error
 - **File(s)**: `src/dashboard/callbacks.py`, `src/dashboard/components.py` (or equivalent table builder)
@@ -1851,6 +1852,9 @@ Apply the same `* contract_value` conversion to `quantity` in `_parse_order`, co
 
 **Fix Suggestion**:
 Add `fee` column to the trade history table component. Also consider adding a cumulative-fees metric card to the portfolio overview.
+
+**Fix History**:
+- **[2026-06-10] Fix attempted by Fable 5 (while implementing FABLE-012, see fable_issues.md)**: Added a "Fee" column (`${t.fee:,.4f}`) to `build_trade_history_table` in `src/dashboard/components.py`, between PnL and Strategy. Cumulative fees are also now visible per strategy in the new Performance Statistics table ("Fees" column, FABLE-012), which covers the cumulative-fees suggestion. No dedicated test (display-only); covered indirectly by `tests/test_fable_012_performance_stats.py` table tests. pytest tests/ → 363 passed, 8 skipped.
 
 ---
 

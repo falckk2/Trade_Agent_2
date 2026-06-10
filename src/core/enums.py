@@ -57,3 +57,7 @@ class EventType(str, Enum):
     POSITION_OPENED = "position_opened"
     POSITION_CLOSED = "position_closed"
     PORTFOLIO_UPDATE = "portfolio_update"
+    # Critical operator-facing conditions (drawdown halt, failed shutdown
+    # close, reconnect storm). Payload: {"level": "critical"|"warning",
+    # "message": str} (FABLE-011).
+    ALERT = "alert"

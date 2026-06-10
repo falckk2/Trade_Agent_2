@@ -20,7 +20,11 @@ risk:
 engine:
   timeframe: "5m"
   candle_limit: 200
-  interval_seconds: 5
+  # Tick cadence. With 5m candles, strategy signals can only change once per
+  # candle, so very short intervals mostly burn REST calls (FABLE-008).
+  # 30s keeps the software stop-loss backstop reasonably fresh; the primary
+  # protection is the exchange-side TP/SL attached to every entry (FABLE-001).
+  interval_seconds: 30
 
 dashboard:
   host: "127.0.0.1"

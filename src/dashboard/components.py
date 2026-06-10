@@ -257,6 +257,7 @@ def build_trade_history_table(trades: list[TradeRecord]) -> dash_table.DataTable
                 "Exit": f"${t.exit_price:,.2f}",
                 "Qty": f"{t.quantity:.4f}",
                 "PnL": f"${t.pnl:,.2f}",
+                "Fee": f"${t.fee:,.4f}",
                 "Strategy": t.strategy_name,
                 "Opened": t.opened_at.strftime("%Y-%m-%d %H:%M"),
                 "Closed": t.closed_at.strftime("%Y-%m-%d %H:%M"),
@@ -270,7 +271,7 @@ def build_trade_history_table(trades: list[TradeRecord]) -> dash_table.DataTable
         data=data,
         columns=[
             {"name": c, "id": c}
-            for c in ["Symbol", "Side", "Entry", "Exit", "Qty", "PnL", "Strategy", "Opened", "Closed"]
+            for c in ["Symbol", "Side", "Entry", "Exit", "Qty", "PnL", "Fee", "Strategy", "Opened", "Closed"]
         ],
         style_table={
             "overflowX": "auto",
@@ -297,6 +298,63 @@ def build_trade_history_table(trades: list[TradeRecord]) -> dash_table.DataTable
         ],
         sort_action="native",
         page_action="none",
+    )
+
+
+def build_performance_stats_table(stats_rows: list[dict]) -> dash_table.DataTable:
+    """Per-strategy performance statistics (FABLE-012).
+
+    stats_rows: list of dicts with a "name" key plus the output of
+    PortfolioManager.get_performance_stats().
+    """
+    def _pf(value: float) -> str:
+        return "∞" if value == float("inf") else f"{value:.2f}"
+
+    data = []
+    for row in stats_rows:
+        data.append(
+            {
+                "Strategy": row["name"],
+                "Trades": row["trade_count"],
+                "Win Rate": f"{row['win_rate'] * 100:.1f}%",
+                "Net PnL": f"${row['net_pnl']:,.2f}",
+                "Fees": f"${row['total_fees']:,.4f}",
+                "Profit Factor": _pf(row["profit_factor"]),
+                "Avg Win": f"${row['avg_win']:,.2f}",
+                "Avg Loss": f"${row['avg_loss']:,.2f}",
+                "Expectancy": f"${row['expectancy']:,.2f}",
+                "Max Loss Streak": row["max_consecutive_losses"],
+            }
+        )
+
+    return dash_table.DataTable(
+        data=data,
+        columns=[
+            {"name": c, "id": c}
+            for c in [
+                "Strategy", "Trades", "Win Rate", "Net PnL", "Fees",
+                "Profit Factor", "Avg Win", "Avg Loss", "Expectancy",
+                "Max Loss Streak",
+            ]
+        ],
+        style_table={"overflowX": "auto"},
+        style_header={
+            "backgroundColor": "#1e1e2f",
+            "color": "#fff",
+            "fontWeight": "bold",
+            "border": "1px solid #333",
+        },
+        style_cell={
+            "backgroundColor": "#16161d",
+            "color": "#fff",
+            "border": "1px solid #333",
+            "textAlign": "center",
+            "padding": "8px",
+        },
+        style_data_conditional=[
+            {"if": {"filter_query": '{Net PnL} contains "-"'}, "color": "#ff1744"},
+            {"if": {"filter_query": '{Strategy} = "TOTAL"'}, "fontWeight": "bold"},
+        ],
     )
 
 

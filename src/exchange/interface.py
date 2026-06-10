@@ -41,11 +41,22 @@ class ITradingAccount(ABC):
         order_type: OrderType,
         quantity: float,
         price: float | None = None,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
     ) -> Order:
         ...
 
     @abstractmethod
     async def cancel_order(self, order_id: str, symbol: str) -> bool:
+        ...
+
+    @abstractmethod
+    async def cancel_tpsl_orders(self, symbol: str) -> int:
+        """Cancel all active TP/SL trigger orders for a symbol.
+
+        Returns the number of orders cancelled. Used after a position is
+        closed so leftover triggers cannot fire and open an opposite position.
+        """
         ...
 
     @abstractmethod

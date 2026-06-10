@@ -141,6 +141,15 @@ def create_layout(
                                         id="strategy-equity-chart",
                                         style={"marginBottom": "24px"},
                                     ),
+                                    # Performance statistics (FABLE-012)
+                                    html.H3(
+                                        "Performance Statistics",
+                                        style={"marginBottom": "12px"},
+                                    ),
+                                    html.Div(
+                                        id="performance-stats-table",
+                                        style={"marginBottom": "24px"},
+                                    ),
                                     # Trade history
                                     html.H3(
                                         "Trade History",

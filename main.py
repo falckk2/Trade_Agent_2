@@ -24,6 +24,7 @@ from src.execution.executor import OrderExecutor
 from src.portfolio.manager import PortfolioManager
 from src.risk.manager import RiskManager
 from src.exchange.blofin_websocket import BloFinWebSocket
+from src.notifications.telegram import TelegramNotifier
 from src.strategies.factory import StrategyFactory
 
 logging.basicConfig(
@@ -67,6 +68,14 @@ def build_components(config: dict):
     # Event bus
     event_bus = EventBus()
 
+    # Operator alerts (FABLE-011) — no-op unless TELEGRAM_BOT_TOKEN and
+    # TELEGRAM_CHAT_ID are set in the environment/.env.
+    notifier = TelegramNotifier(
+        bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+        chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+    )
+    notifier.attach(event_bus)
+
     # Exchange
     exchange = BloFinExchange(
         api_key=api_key,
@@ -78,9 +87,10 @@ def build_components(config: dict):
     # Data provider
     data_provider = MarketDataProvider(exchange=exchange, event_bus=event_bus)
 
-    # Risk manager — baseline_file persists initial equity across restarts so
-    # the drawdown window is not silently reset each time the bot is restarted.
-    # Delete data/initial_equity.json to deliberately reset the baseline.
+    # Risk manager — baseline_file persists the equity high-watermark across
+    # restarts so the drawdown window is not silently reset each time the bot
+    # is restarted. Delete data/initial_equity.json to deliberately reset it
+    # (required after external deposits/withdrawals).
     data_dir = Path(data_cfg.get("data_dir", "data"))
     risk_manager = RiskManager(
         max_position_pct=risk_cfg.get("max_position_pct", 0.05),
@@ -90,6 +100,7 @@ def build_components(config: dict):
         default_take_profit_pct=risk_cfg.get("default_take_profit_pct", 0.04),
         min_signal_strength=risk_cfg.get("min_signal_strength", 0.3),
         baseline_file=data_dir / "initial_equity.json",
+        event_bus=event_bus,
     )
 
     # Order executor
@@ -226,11 +237,22 @@ def main():
 
         await stop_event.wait()
         logger.info("Shutdown signal received — stopping engine")
+        # stop() waits for any in-flight tick to drain before closing positions
+        # (FABLE-003); start() then returns naturally, so await — don't cancel.
         await engine.stop()
-        engine_task.cancel()
+        try:
+            await engine_task
+        except Exception:
+            logger.exception("Engine task ended with error")
         if ws_task is not None:
             await ws_client.disconnect()
             ws_task.cancel()
+            try:
+                await ws_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.debug("WebSocket task ended with error", exc_info=True)
 
     try:
         asyncio.run(run_engine())

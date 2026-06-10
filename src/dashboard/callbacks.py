@@ -11,6 +11,7 @@ from src.dashboard.components import (
     build_candlestick_chart,
     build_equity_chart,
     build_metric_card,
+    build_performance_stats_table,
     build_pnl_bar_chart,
     build_positions_table,
     build_trade_history_table,
@@ -83,6 +84,7 @@ def register_callbacks(
         [
             Output("pnl-bar-chart", "figure"),
             Output("strategy-equity-chart", "figure"),
+            Output("performance-stats-table", "children"),
             Output("trade-history-table", "children"),
         ],
         [
@@ -97,11 +99,19 @@ def register_callbacks(
         snapshots = portfolio_manager.get_snapshots()
         strat_fig = _build_strategy_equity_curves(snapshots, selected_strategy)
 
+        # Per-strategy performance stats + a TOTAL row (FABLE-012)
+        stats_rows = [
+            {"name": name, **portfolio_manager.get_performance_stats(name)}
+            for name in portfolio_manager.get_all_strategy_names()
+        ]
+        stats_rows.append({"name": "TOTAL", **portfolio_manager.get_performance_stats()})
+        stats_tbl = build_performance_stats_table(stats_rows)
+
         filter_name = None if selected_strategy == "all" else selected_strategy
         trades = portfolio_manager.get_trade_history(filter_name)
         trade_tbl = build_trade_history_table(trades)
 
-        return pnl_fig, strat_fig, trade_tbl
+        return pnl_fig, strat_fig, stats_tbl, trade_tbl
 
     @app.callback(
         Output("candlestick-chart", "figure"),

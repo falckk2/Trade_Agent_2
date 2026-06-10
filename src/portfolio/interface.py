@@ -35,5 +35,14 @@ class IPortfolioManager(ABC):
         ...
 
     @abstractmethod
+    def get_performance_stats(self, strategy_name: str | None = None) -> dict:
+        """Compute performance statistics from recorded trades.
+
+        With strategy_name=None, stats cover all trades; otherwise only the
+        named strategy's trades.
+        """
+        ...
+
+    @abstractmethod
     def save_trade_history(self) -> None:
         ...
