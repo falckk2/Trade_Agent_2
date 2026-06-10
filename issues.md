@@ -1897,6 +1897,8 @@ Run the issue-test-validator agent targeting ISSUE-032 through ISSUE-039. Write 
 
 The proper fix is to authenticate the WebSocket connection (send a login message after connect) and/or subscribe via the private channel, which has a longer or no idle timeout.
 
+**Update [2026-06-10]**: A 4.6-minute demo trial after the FABLE-002 fix (sync SDK calls no longer block the event loop — see fable_issues.md) showed **0 reconnects** where the prior baseline predicted 2–3. The likely root cause was delayed heartbeat pings due to event-loop blocking, not the unauthenticated channel itself. Recommend a longer soak run before closing; the WS-auth fix suggested below may be unnecessary.
+
 **Fix Suggestion**:
 After connecting, send a BloFin login message:
 ```python
