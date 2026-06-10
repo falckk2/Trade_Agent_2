@@ -9,7 +9,8 @@ Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplica
 ## Summary
 - Total Issues: 13
 - Critical: 1 | High: 3 | Medium: 6 | Low: 3
-- Open: 0 | Investigating: 0 | Fix Attempted: 10 | Fix Failed: 0 | Resolved: 3
+- Open: 0 | Investigating: 0 | Fix Attempted: 9 | Fix Failed: 0 | Resolved: 4
+- _Third pass 2026-06-10 (evening): ISSUE-040/042/043 in issues.md resolved (043 root cause: server requires client pings every ~30s and inbound data does not reset the timer — fixed with fixed 15s ping cadence, verified by 10-min soak: 1 reconnect vs ~16 expected). FABLE-002 promoted to Resolved with corrected attribution. pytest → 395 passed, 8 skipped._
 - _Verification pass 2026-06-10 (later same day): FABLE-001 RESOLVED via live demo trade (TP/SL trigger registered on exchange with exact submitted prices; BloFin auto-cancels attached TP/SL on position close — `scripts/verify_tpsl_demo.py`). FABLE-003 RESOLVED via observed clean SIGTERM shutdown + unit coverage. FABLE-013 (new: fetch script single-page incremental bug) found, fixed, and verified — all historical data now continuous through 2026-06-10. Parameter sweep (`scripts/tune_strategies.py`) drove config changes: timeframe 5m → 1H, ETH SMA 10/30 → 5/30, RSI strategies removed (net-negative across the entire grid). See FABLE-010 fix history for numbers._
 - _Review basis: full read of `main.py`, `src/engine/`, `src/exchange/`, `src/execution/`, `src/portfolio/`, `src/risk/`, `src/data/`, plus config. Baseline test run: pytest tests/ → 308 passed, 8 skipped._
 - _Suggested fix order: FABLE-001 → FABLE-003 → FABLE-002 → FABLE-004 → FABLE-005 → remainder._
@@ -51,7 +52,7 @@ BloFin's `place_order` supports attaching TP/SL trigger parameters (`tpTriggerPr
 ---
 
 ### FABLE-002: All BloFin SDK calls are synchronous inside `async def` — they block the event loop
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: HIGH
 - **Category**: Architecture / Concurrency
 - **File(s)**: `src/exchange/blofin_exchange.py` (every method that touches `self.client`: `get_balance` :170, `place_order` :210, `cancel_order` :242, `get_open_orders` :251, `get_order` :293/:302, `get_positions` :315, `get_candles` :352, `get_ticker` :372, `_load_instrument_specs` :125)
@@ -84,6 +85,7 @@ Apply uniformly to all client calls listed above (a small private helper like `a
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Verified the SDK's `send_request` uses module-level `requests.get/post` (no shared Session) — thread-safe per call, so no serialization lock needed. Added static helper `BloFinExchange._call(fn, *args, **kwargs)` = `await asyncio.to_thread(fn, ...)` and converted every SDK call site: `get_balance`, `place_order`, `cancel_order`, `cancel_tpsl_orders` (list + per-order cancel), `get_open_orders`, `get_order` (both phases), `get_positions`, `get_candles`, `get_ticker`; `connect()` now runs `_load_instrument_specs` via `asyncio.to_thread` (its internal `get_instruments` call stays sync — it already executes in the worker thread). No call sites remain that invoke `self.client.*` directly on the event loop (verified by grep). No new tests — behavior is identical from callers' perspective and existing 325-test suite passes; the observable effect (WS ping latency) needs a live trial. Re-measure ISSUE-043 reconnect frequency on next demo run. pytest tests/ → 325 passed, 8 skipped.
 - **[2026-06-10] Demo trial (4.6 min, post-fix)**: **0 WebSocket reconnects** (previous baseline: ~5 per 10 min, so 2–3 expected in this window). No warnings or exceptions anywhere in the log. Strongly suggests the event-loop blocking was the dominant cause of the ISSUE-043 reconnect storms — heartbeat pings now go out on time. A longer soak run would confirm, but behavior is verified working.
+- **[2026-06-10] Correction + RESOLVED**: A later 1H-config soak showed ISSUE-043's storms had a separate root cause (ping-on-receive-timeout losing the race with the server's ~30s ping deadline — fixed independently, see ISSUE-043 in issues.md). FABLE-002's own claim — SDK calls no longer block the event loop — stands on its own: verified by code audit (zero direct `self.client.*` calls on the loop), the full test suite, and two clean demo runs. Resolved.
 
 ---
 

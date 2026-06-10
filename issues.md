@@ -5,7 +5,8 @@ _Last updated: 2026-06-06_
 ## Summary
 - Total Issues: 43
 - Critical: 4 | High: 12 | Medium: 17 | Low: 10
-- Open: 3 | Investigating: 0 | Fix Attempted: 1 | Fix Failed: 0 | Resolved: 39
+- Open: 0 | Investigating: 0 | Fix Attempted: 1 | Fix Failed: 0 | Resolved: 42
+- _2026-06-10 (second pass): ISSUE-040 and ISSUE-042 resolved (units fix + 10 regression tests in tests/test_issue_032_to_040_regressions.py). ISSUE-043 resolved: root cause was the ping-on-receive-timeout design losing the race with the server's ~30s ping deadline (inbound data does not reset it — measured); fixed with a fixed 15s ping cadence and verified by a 10-min soak (1 reconnect vs ~16 expected). **Zero Open issues remain**; ISSUE-041 stays Fix Attempted pending visual dashboard check._
 - _2026-06-10: ISSUE-041 fixed by Fable 5 alongside dashboard work tracked in fable_issues.md (FABLE-012). ISSUE-040/042/043 remain open; note FABLE-002 (async SDK fix, see fable_issues.md) likely reduces ISSUE-043 reconnect frequency — re-measure on next live trial._
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
 - _Last resolved by issue-resolver agent: 2026-06-01_
@@ -1824,7 +1825,7 @@ BloFin's `filledSize` field is in contracts. `_parse_order` stored it directly a
 ---
 
 ### ISSUE-040: `_parse_order` leaves `Order.quantity` in contracts — inconsistent with `filled_quantity` fix
-- **Status**: Open
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Logic Error
 - **File(s)**: `src/exchange/blofin_exchange.py` (`_parse_order`)
@@ -1836,6 +1837,9 @@ ISSUE-039 converted `filled_quantity` from contracts to base units by multiplyin
 
 **Fix Suggestion**:
 Apply the same `* contract_value` conversion to `quantity` in `_parse_order`, consistent with the `filled_quantity` fix.
+
+**Fix History**:
+- **[2026-06-10] Fixed by Fable 5**: `_parse_order` now computes `size_base = float(item.get("size", 0)) * contract_value` and assigns it to `Order.quantity` — same conversion as `filled_quantity` (ISSUE-039). Test: `tests/test_issue_032_to_040_regressions.py::TestIssue035And038And039And040ParseOrder::test_quantity_converted_to_base_units_consistent_with_filled` asserts both fields are in base units and equal for a fully filled order. pytest tests/ → 393 passed, 8 skipped.
 
 ---
 
@@ -1859,7 +1863,7 @@ Add `fee` column to the trade history table component. Also consider adding a cu
 ---
 
 ### ISSUE-042: No targeted pytest tests for ISSUE-032 through ISSUE-039
-- **Status**: Open
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Test Coverage
 - **File(s)**: `tests/` (missing test files)
@@ -1882,10 +1886,13 @@ Without test coverage these fixes are only verified by manual live trials, makin
 **Fix Suggestion**:
 Run the issue-test-validator agent targeting ISSUE-032 through ISSUE-039. Write unit tests for each using mocks where live API access is not needed.
 
+**Fix History**:
+- **[2026-06-10] Resolved by Fable 5**: New `tests/test_issue_032_to_040_regressions.py` (10 tests) covers ISSUE-032 (close_all_positions closes every position + one failure doesn't block others), ISSUE-033 (`_await_fill` position-check fallback marks FILLED vs cancels when flat), ISSUE-035 (`averagePrice`/`filledSize` field names), ISSUE-037 (shutdown closures recorded via `update([], balance)` — trade IDs verified in history), ISSUE-038 (price='0' → None; nonzero limit preserved), ISSUE-039/040 (contracts→base conversion for both quantity fields), plus fee-abs parsing. ISSUE-034 and ISSUE-036 were already covered by `tests/test_fable_007_drawdown_high_watermark.py` and `tests/test_fable_004/006` respectively (cross-referenced in the file docstring, not duplicated). pytest tests/ → 393 passed, 8 skipped.
+
 ---
 
 ### ISSUE-043: WebSocket uses unauthenticated public channel — server idles out every ~30s
-- **Status**: Open
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Bug
 - **File(s)**: `src/exchange/blofin_websocket.py`
@@ -1898,6 +1905,10 @@ Run the issue-test-validator agent targeting ISSUE-032 through ISSUE-039. Write 
 The proper fix is to authenticate the WebSocket connection (send a login message after connect) and/or subscribe via the private channel, which has a longer or no idle timeout.
 
 **Update [2026-06-10]**: A 4.6-minute demo trial after the FABLE-002 fix (sync SDK calls no longer block the event loop — see fable_issues.md) showed **0 reconnects** where the prior baseline predicted 2–3. The likely root cause was delayed heartbeat pings due to event-loop blocking, not the unauthenticated channel itself. Recommend a longer soak run before closing; the WS-auth fix suggested below may be unnecessary.
+
+**Fix History**:
+- **[2026-06-10] Root cause isolated and fixed by Fable 5**: The FABLE-002 attribution above was incomplete — a 20-min soak on the (quieter) `candle1H` channel reconnect-stormed again: 9 drops in 3.5 min, one every ~36s. A controlled experiment (4 parallel demo-WS connections, `/tmp/ws_keepalive_test.py` methodology recorded in `tests/test_issue_043_proactive_ping_cadence.py`) proved: (a) the server closes any connection going ~30s without a client PING; (b) **inbound data does not reset the timer** (a pingless connection receiving ticker pushes was closed every ~31s); (c) JSON and plain-text pings both work when sent within the window. The real bug: `listen()` pinged only after a 30s receive timeout — exactly at/after the server's deadline. Fix: `listen()` now pings on a fixed `_PING_INTERVAL=15s` cadence at the top of the loop, regardless of message traffic. WS auth is NOT needed.
+- **[2026-06-10] Verified**: 10-min soak on the 1H config (the configuration that stormed): **1 reconnect in 10 minutes** (vs ~16 expected pre-fix), recovered in 6s on the first attempt. Regression tests: `tests/test_issue_043_proactive_ping_cadence.py` (pings while messages flow; pings on silent channel). pytest tests/ → 395 passed, 8 skipped. Resolved.
 
 **Fix Suggestion**:
 After connecting, send a BloFin login message:

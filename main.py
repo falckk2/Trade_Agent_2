@@ -259,8 +259,9 @@ def main():
     except KeyboardInterrupt:
         logger.info("Interrupted")
     finally:
-        # Save trade history on exit
-        components["portfolio_manager"].save_trade_history()
+        # No explicit save needed here: every trade is appended to CSV at
+        # record time (FABLE-004) and engine.stop() does a compacting full
+        # rewrite during shutdown (FABLE-003).
         logger.info("Shutdown complete")
 
 

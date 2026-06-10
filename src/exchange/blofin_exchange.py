@@ -339,8 +339,10 @@ class BloFinExchange(IExchange):
         inst_id = item.get("instId", "")
         contract_value = self._instrument_specs.get(inst_id, {}).get("contract_value", 1.0)
 
-        # BloFin returns filledSize in contracts; convert to base units for
-        # consistency with Order.quantity (which callers compute in base units).
+        # BloFin returns size/filledSize in contracts; convert both to base
+        # units so Order.quantity and Order.filled_quantity are comparable
+        # (ISSUE-040) and consistent with the base units callers pass in.
+        size_base = float(item.get("size", 0)) * contract_value
         filled_contracts = float(item.get("filledSize", item.get("accFillSz", 0)))
         filled_base = filled_contracts * contract_value
 
@@ -355,7 +357,7 @@ class BloFinExchange(IExchange):
             order_type=OrderType.LIMIT
             if item.get("orderType") == "limit"
             else OrderType.MARKET,
-            quantity=float(item.get("size", 0)),
+            quantity=size_base,
             price=limit_price,
             status=_parse_order_status(item.get("state", "live")),
             filled_quantity=filled_base,

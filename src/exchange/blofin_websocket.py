@@ -71,13 +71,29 @@ class BloFinWebSocket:
             await self._ws.send_json(sub)
             logger.info("Subscribed to %s candles for %s", bar, symbol)
 
+    # BloFin's demo WS closes connections that go ~30s without a PING from the
+    # client — inbound data does NOT reset that timer (measured 2026-06-10:
+    # a connection receiving ticker pushes but sending no pings was closed
+    # every ~31s, while connections pinging every 15s/25s never dropped).
+    # Ping on a fixed cadence, not only after receive-timeouts (ISSUE-043).
+    _PING_INTERVAL = 15.0
+
     async def listen(self) -> None:
         if not self._ws:
             raise RuntimeError("WebSocket not connected")
 
+        last_ping = time.monotonic()
         while self._running:
             try:
-                msg = await asyncio.wait_for(self._ws.receive(), timeout=30)
+                now = time.monotonic()
+                if now - last_ping >= self._PING_INTERVAL:
+                    if self._ws and not self._ws.closed:
+                        await self._ws.send_json({"op": "ping"})
+                    last_ping = now
+
+                msg = await asyncio.wait_for(
+                    self._ws.receive(), timeout=self._PING_INTERVAL
+                )
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
                     await self._handle_message(data)
@@ -87,15 +103,16 @@ class BloFinWebSocket:
                 ):
                     logger.warning("WebSocket closed/error, reconnecting...")
                     await self._reconnect()
+                    last_ping = time.monotonic()
             except asyncio.TimeoutError:
-                # Send BloFin heartbeat ping (JSON format required; plain "ping"
-                # string causes the server to close the connection)
-                if self._ws and not self._ws.closed:
-                    await self._ws.send_json({"op": "ping"})
+                # Quiet channel — loop back around; the ping check at the top
+                # of the loop sends the heartbeat.
+                continue
             except Exception:
                 logger.exception("WebSocket listen error")
                 if self._running:
                     await self._reconnect()
+                    last_ping = time.monotonic()
 
     async def _reconnect(self) -> None:
         delay = 5
