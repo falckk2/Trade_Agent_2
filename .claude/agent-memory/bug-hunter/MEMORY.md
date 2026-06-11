@@ -4,3 +4,4 @@
 - [Architectural Weak Spots](architectural-weak-spots.md) — Files/areas of repeated bug findings in this codebase
 - [Verification 2026-05-16](verification-2026-05-16.md) — Mode B pass: 22 fixes confirmed, 0 failed; baseline for next audit
 - [Verification 2026-06-01](verification-2026-06-01.md) — Mode B pass: ISSUE-012/014/017/022 confirmed Resolved, 0 reverted; 276 pass/8 skip
+- [Verification 2026-06-11](verification-2026-06-11.md) — Mode B on fable_issues.md: 8 promoted Resolved, 5 held Fix Attempted; 444 pass/8 skip

@@ -1,6 +1,6 @@
 # Fable Issues Register
 
-_Last updated: 2026-06-11_
+_Last updated: 2026-06-11 (bug-hunter verification pass)_
 
 This register tracks architectural and structural issues found during a full-codebase review by Claude (Fable 5) on 2026-06-10. It complements `issues.md` (the original bug-by-bug register, 43 issues, 39 resolved). Issue IDs here use the `FABLE-` prefix to avoid colliding with `ISSUE-` numbering. Agents (issue-resolver, bug-hunter, issue-test-validator) should treat entries here exactly like `issues.md` entries: investigate, fix, append to **Fix History**, and update **Status** (`Open` → `Investigating` → `Fix Attempted` → `Resolved` / `Fix Failed`).
 
@@ -9,7 +9,8 @@ Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplica
 ## Summary
 - Total Issues: 18
 - Critical: 1 | High: 3 | Medium: 9 | Low: 5
-- Open: 1 (FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 13 | Fix Failed: 0 | Resolved: 4
+- Open: 1 (FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 5 | Fix Failed: 0 | Resolved: 12
+- _Eighth pass 2026-06-11 (bug-hunter verification): Reviewed all 13 Fix-Attempted issues against current code + tests (full suite 444 passed, 8 skipped). Promoted to Resolved: FABLE-004, 005, 006, 007, 009, 010, 012, 014 — each verified by code inspection and its dedicated test file, with no outstanding live/external verification. Held at Fix Attempted (each has a stated remaining acceptance criterion): FABLE-008 (event-driven redesign unbuilt — only the config mitigation landed), FABLE-011 (real Telegram delivery unobserved), FABLE-015 (automatic crash-restart unobserved; VPS system-unit pending), FABLE-017 (real TradingView-originated alert pending), FABLE-018 (the "action"/scheduling half of the feedback loop unbuilt). No fixes failed or regressed; no statuses demoted. Note: `systemctl --user`/`journalctl` runtime checks were not permitted in this environment, so FABLE-015 runtime supervision state could not be re-confirmed live._
 - _Seventh pass 2026-06-11 (afternoon): FABLE-017 verified end-to-end on demo — local curl alert → next-tick order with TP/SL attached → close alert → position closed and recorded; public path verified through a cloudflared quick tunnel (health OK, bad secret 401). Webhook receiver + `tv_marketcipher_btc` now ENABLED in config for the testing phase. FABLE-015 fix attempted: `deploy/trade-agent.service` created and installed as a local user unit with linger (motivated by the overnight WSL shutdown killing the trial mid-drain); bot now supervised under journald. Observation: demo WS still reconnects ~every 5-6 min (recovers in ~5 s, 1 attempt, no storm) — looks like server-side connection cycling, tolerable but worth watching._
 - _Sixth pass 2026-06-11: FABLE-017 built (user chose a VPS for hosting): `WebhookSignalStrategy` (consume-once, staleness expiry) + aiohttp `TradingViewWebhookServer` (shared-secret auth, per-strategy routing, symbol-match enforcement, optional IP allowlist) + main.py fail-safe wiring + `docs/tradingview_webhook.md` (VPS/caddy/alert-JSON guide). `tv_marketcipher_btc` entry added to strategies.yaml, disabled until the endpoint is live. 32 new tests; pytest → 444 passed, 8 skipped. Remains Fix Attempted pending end-to-end verification with a real TradingView alert against the VPS._
 - _Fifth pass 2026-06-10 (late evening): FABLE-017/018 filed from user request. FABLE-018 partially built same day (equity-curve persistence + live-vs-backtest performance report). Two MarketCipher-inspired strategies implemented natively (`wavetrend`, `ema_ribbon`), tested (13 new tests), backtested — both DISABLED in config: WaveTrend overfits in-sample on 4H (IS PF up to 3.4, OOS PF 0.3-0.45), ema_ribbon inconsistent across windows. pytest → 412 passed, 8 skipped._
@@ -129,7 +130,7 @@ Write a regression test: start engine with a slow fake tick, trigger stop mid-ti
 ---
 
 ### FABLE-004: Trade history is persisted only at shutdown — a crash loses the whole session's trades
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: HIGH
 - **Category**: Data Integrity
 - **File(s)**: `src/portfolio/manager.py` (`save_trade_history` :149, `_record_trade` :260), `src/engine/trading_engine.py` (:162), `main.py` (:241)
@@ -147,11 +148,12 @@ Mind the existing `_lock` (already held in `_record_trade`) and keep file I/O fa
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Implemented option 1 (append-per-trade). Extracted shared `_CSV_HEADER` constant and `_trade_row()` helper (now used by both `save_trade_history` and the new path, eliminating the duplicated column list). New `_append_trade_to_csv(trade)` appends one row (writing the header when the file doesn't exist), called at the end of `_record_trade` (lock held); I/O failures log and never abort recording. `save_trade_history()` unchanged — its atomic full rewrite at shutdown compacts the file, so appended rows are never duplicated on reload. Tests: new `tests/test_fable_004_incremental_trade_persistence.py` (5 tests: append-without-save, single header across multiple appends, crash-reload reconstructs history + realized P&L, shutdown rewrite doesn't duplicate, append failure doesn't abort in-memory recording). pytest tests/ → 330 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `_append_trade_to_csv(trade)` is called at the end of `_record_trade` under `_lock` (manager.py:439), writes the header when the file is absent (`write_header = not filepath.exists()`), and swallows I/O errors without aborting recording (manager.py:472-489). `save_trade_history` still does the atomic temp-file + `os.replace` full rewrite at shutdown (manager.py:189-217), so appended rows are compacted rather than duplicated. `_load_trade_history` rebuilds `_strategy_realized_pnl` from the same file. `tests/test_fable_004_incremental_trade_persistence.py` 5/5 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding.
 
 ---
 
 ### FABLE-005: `_to_contracts` silently rounds orders UP to exchange minimum size, exceeding risk-approved quantity
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Risk / Logic Error
 - **File(s)**: `src/exchange/blofin_exchange.py` (`_to_contracts` :136-149)
@@ -180,11 +182,12 @@ Note `place_order` currently raises `ValueError` on `contracts <= 0`; callers tr
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: `_to_contracts` now returns `0.0` with an INFO log when the lot-rounded contract count is below `min_size` (no test asserted the old `max()` behavior — verified by grep). `place_order`'s existing `contracts <= 0` guard then raises `ValueError`; `OrderExecutor.execute_signal` wraps only the `place_order` call in `try/except ValueError`, logs the skip at INFO, and returns a synthetic `Order(status=FAILED)` without publishing ORDER_PLACED/ORDER_FILLED — so an expected small-account skip no longer surfaces as a logged exception in `_tick`. The HOLD/CLOSE guard's own ValueError is raised before `place_order` and still propagates. `close_position` is unaffected: close quantities derive from positions that were opened at ≥ min size, so they always convert back to ≥ min size. Tests: new `tests/test_fable_005_min_size_no_roundup.py` (7 tests: below-min → 0, round-to-zero → 0 not min, at-min passthrough, above-min unchanged, place_order raises without calling SDK, executor returns FAILED with no events, HOLD ValueError still propagates). pytest tests/ → 337 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `_to_contracts` returns `0.0` with an INFO log when `rounded < spec["min_size"]` (blofin_exchange.py:152-159) — the old `max(rounded, min_size)` round-up is gone. The downstream `place_order` `contracts <= 0` guard then rejects, and the executor downgrades it to a logged skip rather than an exception. `tests/test_fable_005_min_size_no_roundup.py` 7/7 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding.
 
 ---
 
 ### FABLE-006: Fee/fill-price deques keyed by `(symbol, side)` drift permanently after any missed match
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Data Integrity / Fragile Design
 - **File(s)**: `src/portfolio/manager.py` (`_pending_fill_prices` :40, `_pending_fees` :46, `_on_order_filled` :237, `_record_trade` :313-346)
@@ -203,11 +206,12 @@ Replace positional matching with identity matching: key the cache by `order_id` 
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Implemented identity matching for close fills plus the interim hardening. New `_pending_close_fills: dict[position_id, (price, fee)]` populated in `_on_order_filled` when the event payload carries a `position` with a non-empty id (the payload shape `OrderExecutor.close_position` publishes); such fills no longer enter the positional queues. `_record_trade` consumes by `position.id` first and falls back to the `(symbol, side)` queues for fills without a position — entries and flips (a flip arrives as an opposite-side entry order, so its positional fallback is retained by design; per-leg flip fee attribution remains approximate, see remaining-work note). Empty `position.id` (ISSUE-019 case) falls back to the queue to avoid identity collisions. Hardening: queue depth > 4 logs WARNING; `save_trade_history` warns when any cached fills were never matched. Querying BloFin's fills endpoint as authoritative source remains future work. Tests: new `tests/test_fable_006_close_fill_identity_matching.py` (8 tests, incl. the core "wrong position cannot steal another position's fill" regression). ISSUE-014 FIFO tests unchanged and passing. pytest tests/ → 355 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms identity matching: `_pending_close_fills: dict[position_id, (price, fee)]` is populated in `_on_order_filled` when the payload carries a `position` with a non-empty id (manager.py:289-302), bypassing the positional queues; `_record_trade` consumes by `position.id` first (`_pending_close_fills.pop(position.id)`, manager.py:389) and only falls back to the `(symbol, side)` queue otherwise. Hardening confirmed present: queue-depth > 4 WARNING (manager.py:307-312) and leftover-fill WARNING in `save_trade_history` (manager.py:199-206). The core "wrong position can't steal another's fill" regression is closed. `tests/test_fable_006_close_fill_identity_matching.py` 8/8 pass; full suite 444 passed, 8 skipped. Residual items noted in the prior entry — per-leg flip-fee attribution remains approximate (flips arrive as opposite-side entry orders and use the positional fallback by design) and querying BloFin's fills endpoint as the authoritative price/fee source — are acknowledged future enhancements, not verification gaps; drift in those paths is now visible via the warnings rather than silent.
 
 ---
 
 ### FABLE-007: Drawdown baseline never ratchets up — halt threshold decays as equity grows
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Risk / Design Gap
 - **File(s)**: `src/risk/manager.py` (`set_initial_equity` :63, `validate_signal` :94-108), `data/initial_equity.json`
@@ -224,6 +228,7 @@ Use a trailing high-watermark: on every `validate_signal` (or in a dedicated `up
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: `RiskManager._initial_equity` renamed to `_peak_equity`; `validate_signal` ratchets it up (`equity > peak` → update + `_save_baseline()`) and measures drawdown from the peak. Baseline JSON now stores `peak_equity`; legacy `initial_equity` key is read as the starting peak (backward compatible with existing `data/initial_equity.json`). `set_initial_equity()` keeps its interface name/semantics (seed-once; cannot lower an existing peak). Deposit/withdrawal detection deliberately out of scope — documented in the method docstring and `main.py` comment: delete the baseline file after transfers. Tests: new `tests/test_fable_007_drawdown_high_watermark.py` (6 tests: ratchet rejects 15%-from-new-peak, accepts 5%-from-peak, fixed-baseline behavior preserved, seed cannot lower peak, persistence round-trip writes `peak_equity`, legacy key accepted). Existing `test_rejected_at_max_drawdown` unchanged and passing. pytest tests/ → 343 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `validate_signal` ratchets `_peak_equity = max(...)` and persists via `_save_baseline()` on each new high (manager.py:108-114), measures drawdown from the peak (manager.py:117-121), and `_save_baseline` writes `{"peak_equity": ...}` (manager.py:69-71). `set_initial_equity` seeds once and cannot lower an existing peak (manager.py:85-88); deposit/withdrawal handling is documented out-of-scope in the docstring. `tests/test_fable_007_drawdown_high_watermark.py` 6/6 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding.
 
 ---
 
@@ -243,11 +248,12 @@ Either (cheap) raise `interval_seconds` to ~30-60 and document the tradeoff agai
 
 **Fix History**:
 - **[2026-06-10] Partial fix by Fable 5 (cheap option)**: `interval_seconds` raised 5 → 30 in `config/default.yaml` with a comment documenting the rationale — a 6× reduction in redundant evaluation/REST load. The two amplifying factors are gone: FABLE-002 removed the event-loop blocking, and FABLE-001's exchange-side TP/SL means `_check_exits` is now only a backstop, so 30s latency is acceptable. The better event-driven design (exit checks on a fast timer using WS-fed cached prices; strategy evaluation triggered on candle close via `MarketDataProvider.subscribe`) remains open as future work — it changes signal-timing semantics (strategies currently see the forming candle each tick) and should be validated against a backtest (FABLE-010 now exists for this) plus a live trial before adoption. Config-only change; no new tests. pytest tests/ → 383 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — remains Fix Attempted (partial fix by design)**: Confirmed the cheap mitigation is in place — `config/default.yaml` has `interval_seconds: 30` and `timeframe: "1H"`, and the two amplifying factors are independently resolved (FABLE-002 event-loop blocking; FABLE-001 exchange-side TP/SL means `_check_exits` is a backstop). The mitigation is genuine and verified. NOT promoting to Resolved because the issue's preferred remedy — event-driven evaluation (fast WS-fed exit timer + strategy evaluation on candle close) — remains unbuilt, and the self-described status is a partial config mitigation. Note also that with 1H bars and a 30s interval the per-bar redundancy ratio is now ~120×; the win here is the 6× reduction in absolute REST/eval frequency and rate-limit pressure, not elimination of redundancy. Leave open as the tracking item for the event-driven redesign.
 
 ---
 
 ### FABLE-009: Stale portfolio snapshot within a tick — exits taken by `_check_exits` are invisible to signal processing
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Logic Error
 - **File(s)**: `src/engine/trading_engine.py` (`_tick` :238-247, duplicate-side check :360-367, CLOSE handling :353-357)
@@ -265,11 +271,12 @@ Track whether `_check_exits` closed anything (return a bool/list) and call `_upd
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Implemented the first suggestion. `_check_exits` now returns the number of positions it closed; `_tick` calls `_update_portfolio()` a second time only when that count is non-zero, so signal processing always sees the post-exit state and quiet ticks pay no extra REST round-trip. Tests: new `tests/test_fable_009_post_exit_snapshot_refresh.py` (4 tests: close count returned, zero when no trigger, second portfolio update after an exit, no second update on quiet ticks). pytest tests/ → 347 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `_check_exits` now returns the closed count (trading_engine.py:278-300) and `_tick` calls `_update_portfolio()` a second time only when `closed` is non-zero (trading_engine.py:311-318), so signal processing sees post-exit state and quiet ticks pay no extra REST round-trip. `tests/test_fable_009_post_exit_snapshot_refresh.py` 4/4 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding.
 
 ---
 
 ### FABLE-010: No backtesting capability — strategy parameters are unvalidated guesses
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Enhancement / Test Coverage
 - **File(s)**: new module (suggest `src/backtest/`), `src/strategies/*`
@@ -289,6 +296,7 @@ Keep it synchronous and dependency-free (pandas is already available). Defer par
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Historical data already existed (`scripts/fetch_historical_data.py` → `data/historical/<symbol>/<tf>.csv`, BTC/ETH 5m through 2026-03-27), so only the replay engine was needed. New `src/backtest/engine.py`: synchronous `Backtester` — fills at next-candle open (no look-ahead), adverse slippage in bps, per-side fees (default 0.06% taker), net-mode single position with flip-on-opposite-signal, SL/TP checked against each candle's high/low (stop-first when ambiguous), end-of-data force close, sliding `window=200` candles per `analyze()` call matching the live engine's `candle_limit` (avoids O(n²) over large histories). Stats computed by the new shared `src/portfolio/stats.py:compute_performance_stats` — extracted from `PortfolioManager.get_performance_stats` (FABLE-012), which now delegates to it, so live and backtest numbers are identical in definition. CLI `scripts/run_backtest.py` loads strategies.yaml via StrategyFactory and prints a per-strategy table. Tests: new `tests/test_fable_010_backtester.py` (10 tests with a scripted stub strategy: round-trip P&L, per-side fees, short profits, flip, SL trigger price, no-look-ahead, slippage direction, force close, stats parity with shared function, equity curve). **First real run (26 days of data, `--days 100`): ALL FOUR configured strategies are net-negative after fees** — sma_crossover ~27% win rate / PF 0.62-0.73, rsi 50-56% win rate / PF 0.71-0.87. Strategy parameters need re-tuning before live use. pytest tests/ → 383 passed, 8 skipped. Note: historical data is stale (ends 2026-03-27) — rerun `scripts/fetch_historical_data.py` for current coverage.
 - **[2026-06-10] Data refreshed + parameter sweep run**: Historical data refilled through 2026-06-10 with zero gaps (required fixing FABLE-013 in the fetch script first). New `scripts/tune_strategies.py` sweeps SMA (fast 5-30 × slow 20-150) and RSI (period 7/14/21 × 3 level pairs) grids with an in-sample (2026-01-01..05-01) / out-of-sample (05-01..06-10) split. Findings: **every combination is net-negative on 5m** for both symbols (fees + noise); on **1H**, SMA crossovers are modestly positive in both windows (BTC 10/30: IS PF 1.16 / OOS PF 1.31; ETH 5/30: IS +$26.27 PF 1.29 / OOS +$8.21 PF 1.49) while RSI loses across the whole grid (PF 0.39-0.93). Config updated accordingly: `engine.timeframe` 5m → 1H, ETH SMA params 10/30 → 5/30, both RSI strategies removed (evidence documented in strategies.yaml comments). Caveats: single 5-month window, no walk-forward, modest edges — demo-trial before real funds.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: The capability now exists, is tested, and has been used. Code inspection confirms `src/backtest/engine.py` (`Backtester`: next-candle-open fills, per-side fees, slippage, net-mode flip, SL/TP vs candle high/low, sliding window=200), `scripts/run_backtest.py`, and `scripts/tune_strategies.py` all present; stats come from the shared `src/portfolio/stats.py:compute_performance_stats` that `PortfolioManager.get_performance_stats` also delegates to (manager.py:175-187), guaranteeing live/backtest parity. `tests/test_fable_010_backtester.py` 10/10 pass; full suite 444 passed, 8 skipped. The original gap (no offline strategy evaluation) is closed; strategy-parameter caveats (single window, no walk-forward) are inherent analysis limitations of any backtest, not defects in the backtester. No live/external verification outstanding.
 
 ---
 
@@ -311,6 +319,7 @@ Add a minimal `INotifier` interface (fits the existing ABC/DI pattern) with a Te
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Added `EventType.ALERT` (payload `{"level", "message"}`), `src/notifications/` with `INotifier` ABC (provides `attach(event_bus)` that subscribes `_on_alert`) and `TelegramNotifier` (Bot API POST in a daemon thread — never blocks the loop, never raises; no-op with INFO log when `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` unset). Publishers: (1) `RiskManager` (optional `event_bus` ctor param, wired in `main.py`) publishes a critical alert via `publish_sync` once per halt onset — `_drawdown_alerted` flag resets when drawdown recovers below the limit; (2) `TradingEngine.close_all_positions` publishes critical "MANUAL CLOSE REQUIRED" on a failed shutdown close; (3) `BloFinWebSocket._check_reconnect_storm` (called after each successful reconnect) publishes a warning when ≥5 reconnects land within 10 min, throttled to once per window. `main.py` builds the notifier from env vars and attaches it to the bus. Tests: new `tests/test_fable_011_alerting.py` (10 tests: halt alerts once + re-arms on recovery, no-bus safety, shutdown-close failure alert, storm threshold + once-per-window, notifier disabled/posting/never-raises/event-routing). pytest tests/ → 373 passed, 8 skipped. Note: Telegram delivery itself untested against the real API — needs a live token to verify end-to-end.
+- **[2026-06-11] Verified by bug-hunter — remains Fix Attempted**: Code path verified. `EventType.ALERT` exists; `RiskManager._alert` publishes via `event_bus.publish_sync` once per halt onset with a `_drawdown_alerted` re-arm flag (manager.py:127-136, 164-170); `src/notifications/` provides `INotifier` (`interface.py`) and `TelegramNotifier` (`telegram.py`, posts in a daemon thread, no-op when env vars unset). `tests/test_fable_011_alerting.py` 10/10 pass; full suite 444 passed, 8 skipped. Holding at Fix Attempted per the prior note: real Telegram delivery against the Bot API has not been observed end-to-end (needs a live `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` and an actual alert send). Promote once a real message lands in the configured chat.
 
 ---
 
@@ -331,7 +340,7 @@ The incremental-update path issued a **single** API request with `before=latest_
 ---
 
 ### FABLE-014: Enabled-strategy state lost on every restart — unattended restarts silently stop trading
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Operations / Design Gap
 - **File(s)**: `main.py` (strategy registration), `src/engine/trading_engine.py` (`_enabled_strategies`), `config/strategies.yaml`
@@ -346,6 +355,7 @@ Add an optional `enabled: true|false` (default false) per strategy entry in `con
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Strategy registration extracted from `main()` into testable `register_strategies(engine, factory, strategies_config)`; entries with `enabled: true` are activated via `engine.enable_strategy()` at startup (default remains disabled). Both SMA strategies set `enabled: true` in strategies.yaml for the demo trial started 2026-06-10. Dashboard toggles unchanged (runtime overrides, deliberately not persisted). Tests: new `tests/test_fable_014_config_enabled_strategies.py` (4 tests: flag activates, false/absent stays disabled, unknown entry skipped, production config guard). pytest tests/ → 399 passed, 8 skipped.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `register_strategies(engine, factory, strategies_config)` exists in main.py (called at main.py:249) and activates entries flagged `enabled: true`; `config/strategies.yaml` declares `enabled:` on each strategy (both SMAs and `tv_marketcipher_btc` true; wavetrend/ema_ribbon false). Restart behavior is now declarative and version-controlled. `tests/test_fable_014_config_enabled_strategies.py` 4/4 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding.
 
 ---
 
@@ -365,6 +375,7 @@ Add a systemd user unit (`docs/trade-agent.service` or `deploy/`): `Restart=on-f
 
 **Fix History**:
 - **[2026-06-11] Fix attempted by Fable 5**: Motivating incident: the overnight demo trial was killed by WSL shutdown at 23:37 (SIGTERM mid-drain, no restart). Created `deploy/trade-agent.service` (`Restart=always`, `RestartSec=10`, `TimeoutStopSec=90` so the SIGTERM drain can close positions; install instructions for both VPS system unit and WSL user unit in the file header). Installed locally as a user unit: `systemctl --user enable --now trade-agent` + `loginctl enable-linger rehan` (Linger=yes confirmed) — the demo trial now runs supervised under journald (`journalctl --user -u trade-agent`). Remaining for Resolved: observe an automatic restart after a real crash, and install the system-unit variant on the VPS when FABLE-017 deploys there. Note: linger keeps the bot alive without a session, but a full WSL VM shutdown still kills it — true 24/7 needs the VPS.
+- **[2026-06-11] Verified by bug-hunter — remains Fix Attempted**: `deploy/trade-agent.service` is present and correct — `Restart=always`, `RestartSec=10`, `KillSignal=SIGTERM`, `TimeoutStopSec=90` (allows the SIGTERM drain to close positions), `WantedBy=multi-user.target`, plus header install instructions for both the VPS system unit and the WSL user-unit variant. Holding at Fix Attempted per the prior note: the remaining acceptance criterion — observing an automatic restart after a real crash — has not been demonstrated, and the system-unit install on the VPS is pending. (Tried to confirm runtime state via `systemctl --user`/`journalctl`, but those calls are not permitted in this environment.) Promote once an automatic crash-restart is observed in journald.
 
 ---
 
@@ -405,6 +416,7 @@ Groundwork already done (2026-06-10): MarketCipher's cores are reimplemented nat
 **Fix History**:
 - **[2026-06-11] Fix attempted by Fable 5** (user decided: VPS hosting): (1) `src/strategies/webhook.py` — `WebhookSignalStrategy(IStrategy)`: thread-safe `inject()`, consume-once `analyze()`, signals expire after `max_age_seconds` (default 300 s) so outage-delayed alerts never trade; newest alert replaces an unconsumed older one; registered in the factory as type `webhook`. (2) `src/webhook/server.py` — aiohttp `TradingViewWebhookServer` in the bot's asyncio loop: constant-time shared-secret check (refuses to construct without a secret), routes payload `strategy` name → registered instance, enforces payload `symbol` == the strategy's configured symbol, maps `long|buy/short|sell/close|exit` to SignalType, clamps `strength`, optional source-IP allowlist, `/health` endpoint, 8 KB body cap. (3) `main.py` `build_webhook_server()` — fail-safe: returns None (never starts unauthenticated) when `webhook.enabled` without `WEBHOOK_SECRET`, or when no single-symbol webhook strategies are routable; server stopped before engine drain on shutdown so late alerts can't trade mid-shutdown. (4) Config: `webhook:` section in default.yaml (disabled), `tv_marketcipher_btc` entry in strategies.yaml (disabled until endpoint live). (5) `docs/tradingview_webhook.md`: VPS setup (caddy reverse proxy — TradingView only delivers to ports 80/443), secret generation, alert-message JSON template with TradingView placeholders, suggested MarketCipher alert set, end-to-end curl verification. 32 new tests in `tests/test_fable_017_tradingview_webhook.py` (strategy semantics, auth/routing/rejection paths, real bind/serve/stop, builder fail-safes); pytest → 444 passed, 8 skipped. NOT yet verified end-to-end: needs the user's VPS + domain, then a real TradingView alert through caddy → receiver → demo order (promote to Resolved after that).
 - **[2026-06-11] End-to-end verified on demo (local + tunnel)**: user chose to test locally as well as on the VPS. Receiver enabled (`webhook.enabled: true`, `WEBHOOK_SECRET` in .env) and `tv_marketcipher_btc` enabled in strategies.yaml. Verified live: curl `long` alert → injected → next tick placed `buy BTC-USDT 0.0162 @ 63160.0` with SL 61902.1/TP 65692.0 attached (attributed `composite[sma_crossover_btc,tv_marketcipher_btc]` — diluted by the weighted composite with the SMA, as designed); curl `close` alert → next tick sell, position closed, trade recorded to trade_history.csv (net -$3.21 = spread+fees, expected for immediate round-trip). Public path: cloudflared quick tunnel (binary at `~/.local/bin/cloudflared`, run as transient unit `cloudflared-tunnel`) — `/health` 200 and bad-secret 401 verified through the public URL. Docs updated with tunnel option (2a) + VPS (2b) + supervision section. Remaining for Resolved: a real TradingView-originated alert (user creates the MarketCipher alert pointing at the tunnel or VPS URL).
+- **[2026-06-11] Verified by bug-hunter — remains Fix Attempted**: Code path verified end to end in source: `WebhookSignalStrategy` registered in the factory as type `webhook` (factory.py:9,19); `src/webhook/server.py` `TradingViewWebhookServer` (shared-secret auth, per-strategy routing, symbol-match enforcement); `main.py` `build_webhook_server()` fail-safe wiring (returns None when `webhook.enabled` without `WEBHOOK_SECRET`, main.py:196-199; called at main.py:252); `webhook:` section in default.yaml and `tv_marketcipher_btc` entry in strategies.yaml (enabled). `tests/test_fable_017_tradingview_webhook.py` 32/32 pass; full suite 444 passed, 8 skipped. The local curl + cloudflared-tunnel verification in the prior entry covers the receiver path. Holding at Fix Attempted per task scope: a genuine TradingView-originated alert (TradingView → caddy/tunnel → receiver → demo order) has not yet been observed. Promote once that real alert is confirmed.
 
 ---
 
@@ -421,11 +433,12 @@ Trades were durably recorded (FABLE-004) and stats computable (FABLE-012), but: 
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: (1) `PortfolioManager._append_snapshot_to_csv` appends one row per tick to `data/equity_curve.csv` (timestamp, equity, unrealized, realized, open positions) — crash-safe, ~1 MB/month. (2) New `scripts/performance_report.py`: per-strategy live stats (all time / 30d / 7d) printed beside a backtest of the same params over the same trailing window — divergence between live and sim is the action signal (live ≪ sim → execution problem; both negative → retune via `scripts/tune_strategies.py` or disable). Verified working against current data: correctly shows the pre-fix-era live losses, sim-positive trailing-30d for both enabled SMAs, and sim-negative for the (disabled) wavetrend. **Remaining work**: schedule the report periodically (cron/`/schedule` routine that runs it and acts on divergence — the "improving" half of the loop); consider auto-archiving trade_history from the broken pre-2026-06-10 era so live stats reflect only post-fix execution.
+- **[2026-06-11] Verified by bug-hunter — remains Fix Attempted**: Both core deliverables verified in code: `PortfolioManager._append_snapshot_to_csv` appends one crash-safe row per tick to `data/equity_curve.csv` (manager.py:445-470), called from `update()` (manager.py:135); `scripts/performance_report.py` is present (live per-strategy stats beside a matched-window backtest). The "measurement" and "comparison" halves are built and verified. Holding at Fix Attempted: the issue's "feedback loop" framing requires the "action" half — scheduling the report and acting on live-vs-sim divergence — which is unbuilt (a human must run the report), per the Fix History's own "Remaining work". Promote once the report is scheduled/automated to close the loop, or re-scope the issue to measurement+comparison only.
 
 ---
 
 ### FABLE-012: No performance metrics — trade history exists but is never analyzed
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Enhancement
 - **File(s)**: `src/portfolio/manager.py`, `src/dashboard/components.py`, `src/dashboard/callbacks.py`
@@ -440,5 +453,6 @@ Add `PortfolioManager.get_performance_stats(strategy_name: str | None = None) ->
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5**: Added `PortfolioManager.get_performance_stats(strategy_name=None)` (declared in `IPortfolioManager`): trade/win/loss counts, win rate, net P&L, total fees, gross profit/loss, profit factor (∞ when no losses, 0.0 when no trades), avg win/loss, expectancy, max consecutive losses, avg duration — computed under `_lock` from `_trade_history` (pnl already net of fees). Dashboard: new `build_performance_stats_table` component; `update_strategy_performance` callback now also outputs `performance-stats-table` with one row per strategy + a bold TOTAL row; layout adds a "Performance Statistics" section above Trade History in the Strategy Performance tab. Incidentally fixed ISSUE-041 (fee column) in `build_trade_history_table` while editing the same file — noted in issues.md. Tests: new `tests/test_fable_012_performance_stats.py` (8 tests: overall stats, per-strategy filter, loss streak, avg win/loss, empty zeroes, ∞ profit factor, table rows + TOTAL, ∞ rendering). pytest tests/ → 363 passed, 8 skipped. Backtest reuse (FABLE-010) should call this same function for comparable numbers.
+- **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `PortfolioManager.get_performance_stats(strategy_name=None)` delegates to the shared `compute_performance_stats` (manager.py:175-187); dashboard fully wired — `build_performance_stats_table` (components.py:304), the `performance-stats-table` Output and per-strategy + TOTAL rows in `update_strategy_performance` (callbacks.py:87,104-108), and the table in layout.py:150. `tests/test_fable_012_performance_stats.py` 8/8 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding. (FABLE-016 DataTable deprecation warning still emits from these tables — tracked separately, Open.)
 
 ---
