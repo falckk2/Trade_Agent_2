@@ -6,6 +6,7 @@ from src.strategies.ping_pong import PingPongStrategy
 from src.strategies.rsi_strategy import RSIStrategy
 from src.strategies.sma_crossover import SMACrossoverStrategy
 from src.strategies.wavetrend import WaveTrendStrategy
+from src.strategies.webhook import WebhookSignalStrategy
 
 
 # Registry of built-in strategy types
@@ -15,6 +16,7 @@ _STRATEGY_REGISTRY: dict[str, type[IStrategy]] = {
     "ping_pong": PingPongStrategy,
     "wavetrend": WaveTrendStrategy,
     "ema_ribbon": EMARibbonStrategy,
+    "webhook": WebhookSignalStrategy,
 }
 
 

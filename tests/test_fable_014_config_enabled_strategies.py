@@ -67,3 +67,6 @@ class TestProductionConfig:
         assert entries["sma_crossover_eth"].get("enabled") is True
         assert entries["wavetrend_btc"].get("enabled") is False
         assert entries["ema_ribbon_btc"].get("enabled") is False
+        # Webhook bridge stays disabled until the VPS endpoint is live
+        # (FABLE-017).
+        assert entries["tv_marketcipher_btc"].get("enabled") is False

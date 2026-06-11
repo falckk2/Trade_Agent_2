@@ -26,6 +26,8 @@ from src.risk.manager import RiskManager
 from src.exchange.blofin_websocket import BloFinWebSocket
 from src.notifications.telegram import TelegramNotifier
 from src.strategies.factory import StrategyFactory
+from src.strategies.webhook import WebhookSignalStrategy
+from src.webhook.server import TradingViewWebhookServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -178,6 +180,60 @@ def register_strategies(
     return names
 
 
+def build_webhook_server(
+    config: dict, factory: StrategyFactory, strategies_config: list[dict]
+) -> TradingViewWebhookServer | None:
+    """Build the TradingView webhook receiver if enabled and configured.
+
+    Fails safe: returns None (with a clear error) if enabled without a
+    WEBHOOK_SECRET — the receiver must never run unauthenticated — or if no
+    webhook-type strategies exist to route alerts to.
+    """
+    webhook_cfg = config.get("webhook", {})
+    if not webhook_cfg.get("enabled", False):
+        return None
+
+    secret = os.environ.get("WEBHOOK_SECRET", "")
+    if not secret:
+        logger.error(
+            "webhook.enabled is true but WEBHOOK_SECRET is not set — "
+            "webhook server NOT started"
+        )
+        return None
+
+    server = TradingViewWebhookServer(
+        secret=secret,
+        host=webhook_cfg.get("host", "0.0.0.0"),
+        port=int(webhook_cfg.get("port", 8080)),
+        path=webhook_cfg.get("path", "/webhook/tradingview"),
+        allowed_ips=webhook_cfg.get("allowed_ips") or [],
+    )
+
+    routed = 0
+    for entry in strategies_config:
+        if entry.get("type") != "webhook":
+            continue
+        strategy = factory.get_instance(entry["name"])
+        symbols = entry.get("symbols") or []
+        if not isinstance(strategy, WebhookSignalStrategy) or len(symbols) != 1:
+            logger.error(
+                "Webhook strategy '%s' must be type 'webhook' with exactly "
+                "one symbol — not routed",
+                entry.get("name"),
+            )
+            continue
+        server.register(strategy, symbols[0])
+        routed += 1
+
+    if routed == 0:
+        logger.error(
+            "webhook.enabled is true but no routable webhook strategies in "
+            "strategies.yaml — webhook server NOT started"
+        )
+        return None
+    return server
+
+
 def main():
     # Load configs
     config = load_config()
@@ -191,6 +247,9 @@ def main():
     factory = StrategyFactory()
     factory.create_from_config(strategies_config)
     strategy_names = register_strategies(engine, factory, strategies_config)
+
+    # TradingView webhook receiver (FABLE-017) — None unless enabled in config
+    webhook_server = build_webhook_server(config, factory, strategies_config)
 
     # Create dashboard
     dash_cfg = config.get("dashboard", {})
@@ -248,10 +307,22 @@ def main():
             )
             ws_task = None
 
+        if webhook_server is not None:
+            try:
+                await webhook_server.start()
+            except Exception:
+                logger.exception(
+                    "Failed to start webhook server — continuing without it"
+                )
+
         engine_task = asyncio.create_task(engine.start(interval_seconds=interval))
 
         await stop_event.wait()
         logger.info("Shutdown signal received — stopping engine")
+        # Stop accepting webhook signals before the engine drains so a
+        # late alert cannot open a position during shutdown.
+        if webhook_server is not None:
+            await webhook_server.stop()
         # stop() waits for any in-flight tick to drain before closing positions
         # (FABLE-003); start() then returns naturally, so await — don't cancel.
         await engine.stop()

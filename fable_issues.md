@@ -1,6 +1,6 @@
 # Fable Issues Register
 
-_Last updated: 2026-06-10_
+_Last updated: 2026-06-11_
 
 This register tracks architectural and structural issues found during a full-codebase review by Claude (Fable 5) on 2026-06-10. It complements `issues.md` (the original bug-by-bug register, 43 issues, 39 resolved). Issue IDs here use the `FABLE-` prefix to avoid colliding with `ISSUE-` numbering. Agents (issue-resolver, bug-hunter, issue-test-validator) should treat entries here exactly like `issues.md` entries: investigate, fix, append to **Fix History**, and update **Status** (`Open` → `Investigating` → `Fix Attempted` → `Resolved` / `Fix Failed`).
 
@@ -9,7 +9,8 @@ Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplica
 ## Summary
 - Total Issues: 18
 - Critical: 1 | High: 3 | Medium: 9 | Low: 5
-- Open: 3 (FABLE-015 supervision, FABLE-016 Dash deprecation, FABLE-017 TradingView webhook) | Investigating: 0 | Fix Attempted: 11 | Fix Failed: 0 | Resolved: 4
+- Open: 2 (FABLE-015 supervision, FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 12 | Fix Failed: 0 | Resolved: 4
+- _Sixth pass 2026-06-11: FABLE-017 built (user chose a VPS for hosting): `WebhookSignalStrategy` (consume-once, staleness expiry) + aiohttp `TradingViewWebhookServer` (shared-secret auth, per-strategy routing, symbol-match enforcement, optional IP allowlist) + main.py fail-safe wiring + `docs/tradingview_webhook.md` (VPS/caddy/alert-JSON guide). `tv_marketcipher_btc` entry added to strategies.yaml, disabled until the endpoint is live. 32 new tests; pytest → 444 passed, 8 skipped. Remains Fix Attempted pending end-to-end verification with a real TradingView alert against the VPS._
 - _Fifth pass 2026-06-10 (late evening): FABLE-017/018 filed from user request. FABLE-018 partially built same day (equity-curve persistence + live-vs-backtest performance report). Two MarketCipher-inspired strategies implemented natively (`wavetrend`, `ema_ribbon`), tested (13 new tests), backtested — both DISABLED in config: WaveTrend overfits in-sample on 4H (IS PF up to 3.4, OOS PF 0.3-0.45), ema_ribbon inconsistent across windows. pytest → 412 passed, 8 skipped._
 - _2026-06-10 (fourth pass): FABLE-014/015/016 filed from operational review. FABLE-014 fixed same day (`enabled:` flag in strategies.yaml + `register_strategies()`); both SMA strategies enabled and a long-running demo trial launched on the 1H config. FABLE-015 (systemd unit) and FABLE-016 (dash-ag-grid migration) remain open by choice — small, well-scoped tasks._
 - _Third pass 2026-06-10 (evening): ISSUE-040/042/043 in issues.md resolved (043 root cause: server requires client pings every ~30s and inbound data does not reset the timer — fixed with fixed 15s ping cadence, verified by 10-min soak: 1 reconnect vs ~16 expected). FABLE-002 promoted to Resolved with corrected attribution. pytest → 395 passed, 8 skipped._
@@ -380,10 +381,10 @@ No action until a Dash major-version bump is planned. When migrating: `pip insta
 ---
 
 ### FABLE-017: TradingView/MarketCipher integration — webhook signal bridge
-- **Status**: Open
+- **Status**: Fix Attempted
 - **Severity**: LOW (enhancement)
 - **Category**: Enhancement / Integration
-- **File(s)**: new (suggest `src/strategies/webhook_strategy.py` + a small HTTP receiver)
+- **File(s)**: `src/strategies/webhook.py`, `src/webhook/server.py`, `main.py` (`build_webhook_server`), `docs/tradingview_webhook.md`
 - **Discovered**: 2026-06-10
 - **Discovered By**: user request — TradingView subscription + MarketCipher available
 
@@ -396,6 +397,9 @@ Groundwork already done (2026-06-10): MarketCipher's cores are reimplemented nat
 1. `WebhookSignalStrategy(IStrategy)`: holds the last signal received per symbol; `analyze()` returns and clears it (or returns HOLD).
 2. Small aiohttp endpoint (e.g. `POST /webhook/tradingview` on a configurable port, shared-secret token in the path or body) that validates payload `{symbol, action: long|short|close, strength?}` and feeds the strategy via the EventBus.
 3. **Infrastructure prerequisite (user decision)**: TradingView must reach the endpoint — requires a public URL (cloudflared/ngrok tunnel from WSL, or a VPS). Note: webhook signals cannot be backtested — treat them as a live-only strategy and size accordingly.
+
+**Fix History**:
+- **[2026-06-11] Fix attempted by Fable 5** (user decided: VPS hosting): (1) `src/strategies/webhook.py` — `WebhookSignalStrategy(IStrategy)`: thread-safe `inject()`, consume-once `analyze()`, signals expire after `max_age_seconds` (default 300 s) so outage-delayed alerts never trade; newest alert replaces an unconsumed older one; registered in the factory as type `webhook`. (2) `src/webhook/server.py` — aiohttp `TradingViewWebhookServer` in the bot's asyncio loop: constant-time shared-secret check (refuses to construct without a secret), routes payload `strategy` name → registered instance, enforces payload `symbol` == the strategy's configured symbol, maps `long|buy/short|sell/close|exit` to SignalType, clamps `strength`, optional source-IP allowlist, `/health` endpoint, 8 KB body cap. (3) `main.py` `build_webhook_server()` — fail-safe: returns None (never starts unauthenticated) when `webhook.enabled` without `WEBHOOK_SECRET`, or when no single-symbol webhook strategies are routable; server stopped before engine drain on shutdown so late alerts can't trade mid-shutdown. (4) Config: `webhook:` section in default.yaml (disabled), `tv_marketcipher_btc` entry in strategies.yaml (disabled until endpoint live). (5) `docs/tradingview_webhook.md`: VPS setup (caddy reverse proxy — TradingView only delivers to ports 80/443), secret generation, alert-message JSON template with TradingView placeholders, suggested MarketCipher alert set, end-to-end curl verification. 32 new tests in `tests/test_fable_017_tradingview_webhook.py` (strategy semantics, auth/routing/rejection paths, real bind/serve/stop, builder fail-safes); pytest → 444 passed, 8 skipped. NOT yet verified end-to-end: needs the user's VPS + domain, then a real TradingView alert through caddy → receiver → demo order (promote to Resolved after that).
 
 ---
 

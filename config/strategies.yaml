@@ -64,6 +64,21 @@ strategies:
     symbols:
       - "BTC-USDT"
 
+  # TradingView/MarketCipher webhook bridge (FABLE-017). Signals come from
+  # TradingView alerts POSTed to the webhook receiver — see
+  # docs/tradingview_webhook.md for VPS + alert setup. Webhook signals cannot
+  # be backtested, so this stays disabled until the endpoint is live, and
+  # should start with conservative weight. Each webhook strategy entry must
+  # cover exactly ONE symbol (the receiver enforces the match).
+  - name: tv_marketcipher_btc
+    type: webhook
+    weight: 1.0
+    enabled: false
+    params:
+      max_age_seconds: 300   # alerts older than this are dropped, not traded
+    symbols:
+      - "BTC-USDT"
+
   # RSI strategies removed 2026-06-10: net-negative across the entire
   # parameter grid (period 7/14/21 x levels 70/30, 75/25, 80/20) on both
   # symbols and both timeframes tested. On 1H the losses were severe

@@ -37,3 +37,18 @@ dashboard:
 
 data:
   data_dir: "data"
+
+# TradingView alert webhook receiver (FABLE-017). Requires WEBHOOK_SECRET in
+# the environment/.env — the server refuses to start without it. TradingView
+# only delivers webhooks to ports 80/443, so on a VPS put a reverse proxy
+# with TLS (e.g. caddy) in front of this port. See docs/tradingview_webhook.md.
+webhook:
+  enabled: false
+  host: "0.0.0.0"
+  port: 8080
+  path: "/webhook/tradingview"
+  # Optional source-IP allowlist — only useful when this port is exposed
+  # directly (behind a reverse proxy the remote IP is the proxy; allowlist
+  # there instead). TradingView's published alert IPs as of 2026:
+  # 52.89.214.238, 34.212.75.30, 54.218.53.128, 52.32.178.7
+  allowed_ips: []
