@@ -9,7 +9,8 @@ Note: ISSUE-040 through ISSUE-043 remain open in `issues.md` and are NOT duplica
 ## Summary
 - Total Issues: 18
 - Critical: 1 | High: 3 | Medium: 9 | Low: 5
-- Open: 2 (FABLE-015 supervision, FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 12 | Fix Failed: 0 | Resolved: 4
+- Open: 1 (FABLE-016 Dash deprecation) | Investigating: 0 | Fix Attempted: 13 | Fix Failed: 0 | Resolved: 4
+- _Seventh pass 2026-06-11 (afternoon): FABLE-017 verified end-to-end on demo — local curl alert → next-tick order with TP/SL attached → close alert → position closed and recorded; public path verified through a cloudflared quick tunnel (health OK, bad secret 401). Webhook receiver + `tv_marketcipher_btc` now ENABLED in config for the testing phase. FABLE-015 fix attempted: `deploy/trade-agent.service` created and installed as a local user unit with linger (motivated by the overnight WSL shutdown killing the trial mid-drain); bot now supervised under journald. Observation: demo WS still reconnects ~every 5-6 min (recovers in ~5 s, 1 attempt, no storm) — looks like server-side connection cycling, tolerable but worth watching._
 - _Sixth pass 2026-06-11: FABLE-017 built (user chose a VPS for hosting): `WebhookSignalStrategy` (consume-once, staleness expiry) + aiohttp `TradingViewWebhookServer` (shared-secret auth, per-strategy routing, symbol-match enforcement, optional IP allowlist) + main.py fail-safe wiring + `docs/tradingview_webhook.md` (VPS/caddy/alert-JSON guide). `tv_marketcipher_btc` entry added to strategies.yaml, disabled until the endpoint is live. 32 new tests; pytest → 444 passed, 8 skipped. Remains Fix Attempted pending end-to-end verification with a real TradingView alert against the VPS._
 - _Fifth pass 2026-06-10 (late evening): FABLE-017/018 filed from user request. FABLE-018 partially built same day (equity-curve persistence + live-vs-backtest performance report). Two MarketCipher-inspired strategies implemented natively (`wavetrend`, `ema_ribbon`), tested (13 new tests), backtested — both DISABLED in config: WaveTrend overfits in-sample on 4H (IS PF up to 3.4, OOS PF 0.3-0.45), ema_ribbon inconsistent across windows. pytest → 412 passed, 8 skipped._
 - _2026-06-10 (fourth pass): FABLE-014/015/016 filed from operational review. FABLE-014 fixed same day (`enabled:` flag in strategies.yaml + `register_strategies()`); both SMA strategies enabled and a long-running demo trial launched on the 1H config. FABLE-015 (systemd unit) and FABLE-016 (dash-ag-grid migration) remain open by choice — small, well-scoped tasks._
@@ -349,10 +350,10 @@ Add an optional `enabled: true|false` (default false) per strategy entry in `con
 ---
 
 ### FABLE-015: No process supervision — a crash at 3am stays down until someone notices
-- **Status**: Open
+- **Status**: Fix Attempted
 - **Severity**: MEDIUM
 - **Category**: Operations
-- **File(s)**: deployment (no systemd unit / Docker / supervisor config exists)
+- **File(s)**: `deploy/trade-agent.service`
 - **Discovered**: 2026-06-10
 - **Discovered By**: Fable 5 — operational review
 
@@ -361,6 +362,9 @@ The bot runs as a foreground `python main.py` process. There is no systemd unit,
 
 **Fix Suggestion**:
 Add a systemd user unit (`docs/trade-agent.service` or `deploy/`): `Restart=on-failure`, `RestartSec=30`, `WantedBy=default.target`, working directory + venv python path, journald for logs. Pairs with FABLE-014: with `enabled:` flags in strategies.yaml, a supervised restart resumes trading automatically. Consider a `WatchdogSec`/heartbeat later. Note WSL2 specifics: systemd user units require systemd enabled in wsl.conf.
+
+**Fix History**:
+- **[2026-06-11] Fix attempted by Fable 5**: Motivating incident: the overnight demo trial was killed by WSL shutdown at 23:37 (SIGTERM mid-drain, no restart). Created `deploy/trade-agent.service` (`Restart=always`, `RestartSec=10`, `TimeoutStopSec=90` so the SIGTERM drain can close positions; install instructions for both VPS system unit and WSL user unit in the file header). Installed locally as a user unit: `systemctl --user enable --now trade-agent` + `loginctl enable-linger rehan` (Linger=yes confirmed) — the demo trial now runs supervised under journald (`journalctl --user -u trade-agent`). Remaining for Resolved: observe an automatic restart after a real crash, and install the system-unit variant on the VPS when FABLE-017 deploys there. Note: linger keeps the bot alive without a session, but a full WSL VM shutdown still kills it — true 24/7 needs the VPS.
 
 ---
 
@@ -400,6 +404,7 @@ Groundwork already done (2026-06-10): MarketCipher's cores are reimplemented nat
 
 **Fix History**:
 - **[2026-06-11] Fix attempted by Fable 5** (user decided: VPS hosting): (1) `src/strategies/webhook.py` — `WebhookSignalStrategy(IStrategy)`: thread-safe `inject()`, consume-once `analyze()`, signals expire after `max_age_seconds` (default 300 s) so outage-delayed alerts never trade; newest alert replaces an unconsumed older one; registered in the factory as type `webhook`. (2) `src/webhook/server.py` — aiohttp `TradingViewWebhookServer` in the bot's asyncio loop: constant-time shared-secret check (refuses to construct without a secret), routes payload `strategy` name → registered instance, enforces payload `symbol` == the strategy's configured symbol, maps `long|buy/short|sell/close|exit` to SignalType, clamps `strength`, optional source-IP allowlist, `/health` endpoint, 8 KB body cap. (3) `main.py` `build_webhook_server()` — fail-safe: returns None (never starts unauthenticated) when `webhook.enabled` without `WEBHOOK_SECRET`, or when no single-symbol webhook strategies are routable; server stopped before engine drain on shutdown so late alerts can't trade mid-shutdown. (4) Config: `webhook:` section in default.yaml (disabled), `tv_marketcipher_btc` entry in strategies.yaml (disabled until endpoint live). (5) `docs/tradingview_webhook.md`: VPS setup (caddy reverse proxy — TradingView only delivers to ports 80/443), secret generation, alert-message JSON template with TradingView placeholders, suggested MarketCipher alert set, end-to-end curl verification. 32 new tests in `tests/test_fable_017_tradingview_webhook.py` (strategy semantics, auth/routing/rejection paths, real bind/serve/stop, builder fail-safes); pytest → 444 passed, 8 skipped. NOT yet verified end-to-end: needs the user's VPS + domain, then a real TradingView alert through caddy → receiver → demo order (promote to Resolved after that).
+- **[2026-06-11] End-to-end verified on demo (local + tunnel)**: user chose to test locally as well as on the VPS. Receiver enabled (`webhook.enabled: true`, `WEBHOOK_SECRET` in .env) and `tv_marketcipher_btc` enabled in strategies.yaml. Verified live: curl `long` alert → injected → next tick placed `buy BTC-USDT 0.0162 @ 63160.0` with SL 61902.1/TP 65692.0 attached (attributed `composite[sma_crossover_btc,tv_marketcipher_btc]` — diluted by the weighted composite with the SMA, as designed); curl `close` alert → next tick sell, position closed, trade recorded to trade_history.csv (net -$3.21 = spread+fees, expected for immediate round-trip). Public path: cloudflared quick tunnel (binary at `~/.local/bin/cloudflared`, run as transient unit `cloudflared-tunnel`) — `/health` 200 and bad-secret 401 verified through the public URL. Docs updated with tunnel option (2a) + VPS (2b) + supervision section. Remaining for Resolved: a real TradingView-originated alert (user creates the MarketCipher alert pointing at the tunnel or VPS URL).
 
 ---
 

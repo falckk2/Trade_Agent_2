@@ -1,0 +1,37 @@
+# Trade Agent 2 systemd unit (FABLE-015).
+#
+# VPS (system unit):
+#   sudo cp deploy/trade-agent.service /etc/systemd/system/
+#   # adjust User= and the /home/rehan/Trade_Agent_2 paths if they differ
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trade-agent
+#
+# Local WSL (user unit, no sudo) — remove the User= line first:
+#   mkdir -p ~/.config/systemd/user
+#   sed '/^User=/d; s/multi-user.target/default.target/' \
+#       deploy/trade-agent.service > ~/.config/systemd/user/trade-agent.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now trade-agent
+#   loginctl enable-linger $USER   # keep it running with no session open
+#
+# Logs: journalctl [--user] -u trade-agent -f
+
+[Unit]
+Description=Trade Agent 2 (BloFin trading bot + dashboard)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rehan
+WorkingDirectory=/home/rehan/Trade_Agent_2
+ExecStart=/home/rehan/Trade_Agent_2/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+# SIGTERM triggers the engine's drain: finish in-flight tick, close
+# positions, compact trade history. Give it time before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

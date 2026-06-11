@@ -55,7 +55,27 @@ echo "WEBHOOK_SECRET=$(openssl rand -hex 32)" >> .env
 once the endpoint is reachable. Add one entry per symbol/alert-stream you
 want to trade (e.g. a `tv_marketcipher_eth` for ETH-USDT).
 
-## 2. VPS setup
+## 2a. Testing from WSL — cloudflared quick tunnel
+
+For testing without (or before) the VPS, a Cloudflare quick tunnel gives a
+public HTTPS URL (port 443, TLS — satisfies TradingView's requirements)
+that forwards to the local receiver. The binary is installed at
+`~/.local/bin/cloudflared`. With the bot running:
+
+```bash
+~/.local/bin/cloudflared tunnel --url http://127.0.0.1:8080
+```
+
+It prints a URL like `https://random-words-1234.trycloudflare.com`; the
+TradingView webhook URL is then
+`https://random-words-1234.trycloudflare.com/webhook/tradingview`.
+
+Caveats — testing only, not for unattended operation:
+- The URL **changes on every tunnel restart** (alerts must be re-pointed).
+- Quick tunnels have no uptime guarantee and die with the WSL session.
+- The shared secret is still the real protection; the tunnel adds TLS.
+
+## 2b. VPS setup (persistent endpoint)
 
 Any small VPS works (1 vCPU / 1 GB is plenty). You need a domain or
 subdomain pointing at it (an A record, e.g. `tv.example.com`) because
@@ -90,8 +110,13 @@ curl https://tv.example.com/health
 # → {"status": "ok"}
 ```
 
-Note: FABLE-015 (systemd unit for supervision) becomes more important on a
-VPS — the alert stream is only useful while the bot is running.
+### Supervision (FABLE-015)
+
+The alert stream is only useful while the bot is running, so run it under
+systemd: `deploy/trade-agent.service` (install instructions in the file
+header cover both the VPS system unit and the local WSL user unit).
+`Restart=always` brings the bot back after crashes; `TimeoutStopSec=90`
+gives the shutdown drain time to close positions cleanly.
 
 ### IP allowlisting
 

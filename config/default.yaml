@@ -43,7 +43,7 @@ data:
 # only delivers webhooks to ports 80/443, so on a VPS put a reverse proxy
 # with TLS (e.g. caddy) in front of this port. See docs/tradingview_webhook.md.
 webhook:
-  enabled: false
+  enabled: true
   host: "0.0.0.0"
   port: 8080
   path: "/webhook/tradingview"

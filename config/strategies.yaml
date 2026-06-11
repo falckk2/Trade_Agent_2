@@ -66,14 +66,15 @@ strategies:
 
   # TradingView/MarketCipher webhook bridge (FABLE-017). Signals come from
   # TradingView alerts POSTed to the webhook receiver — see
-  # docs/tradingview_webhook.md for VPS + alert setup. Webhook signals cannot
-  # be backtested, so this stays disabled until the endpoint is live, and
-  # should start with conservative weight. Each webhook strategy entry must
-  # cover exactly ONE symbol (the receiver enforces the match).
+  # docs/tradingview_webhook.md for VPS/tunnel + alert setup. Webhook signals
+  # cannot be backtested — live-only, demo-first, conservative weight. Each
+  # webhook strategy entry must cover exactly ONE symbol (the receiver
+  # enforces the match). Enabled 2026-06-11 for local end-to-end testing
+  # (demo account); it idles at HOLD unless an authenticated alert arrives.
   - name: tv_marketcipher_btc
     type: webhook
     weight: 1.0
-    enabled: false
+    enabled: true
     params:
       max_age_seconds: 300   # alerts older than this are dropped, not traded
     symbols:
