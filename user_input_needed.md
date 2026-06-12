@@ -9,8 +9,8 @@ file each session and remove completed items._
 Everything on the bot side is live and verified — the only missing piece is
 an alert that originates from TradingView itself.
 
-- Webhook URL (current cloudflared quick tunnel):
-  `https://warrant-sake-senators-pike.trycloudflare.com/webhook/tradingview`
+- Webhook URL (current cloudflared quick tunnel, restarted 2026-06-12):
+  `https://convenient-importantly-exciting-the.trycloudflare.com/webhook/tradingview`
   ⚠️ This URL changes if the tunnel restarts. Get the current one with:
   `journalctl --user -u cloudflared-tunnel | grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" | tail -1`
 - The shared secret is in `.env` on this machine: `grep WEBHOOK_SECRET .env`

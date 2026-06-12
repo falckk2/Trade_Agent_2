@@ -9,7 +9,8 @@ description = "Automated cryptocurrency trading bot for BloFin exchange"
 requires-python = ">=3.11"
 dependencies = [
     "blofin>=0.5.0",
-    "dash>=2.14",
+    "dash>=2.14,<5",
+    "dash-ag-grid>=31.0",
     "plotly>=5.18",
     "pandas>=2.1",
     "numpy>=1.26",

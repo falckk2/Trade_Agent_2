@@ -1,6 +1,7 @@
 """Reusable Dash component builders for the trading dashboard."""
 
-from dash import dash_table, html
+import dash_ag_grid as dag
+from dash import html
 import plotly.graph_objects as go
 
 from src.core.enums import SignalType
@@ -8,6 +9,47 @@ from src.core.models import Candle, PortfolioSnapshot, Position, Signal, TradeRe
 
 _DARK_BG = "#16161d"
 _CARD_BG = "#1e1e2f"
+
+# Shared ag-grid configuration (FABLE-016: dash_table.DataTable is deprecated
+# in Dash 4; migrated to dash-ag-grid). AG Grid v33+ defaults to the JS
+# Theming API — "legacy" opts back into the CSS-class themes, whose quartz
+# stylesheet is loaded app-wide in app.py.
+_GRID_THEME_CLASS = "ag-theme-quartz-dark"
+_GRID_DEFAULT_COL = {"sortable": True, "resizable": True, "minWidth": 90}
+
+
+def _grid(
+    data: list[dict],
+    columns: list[str],
+    row_style_conditions: list[dict] | None = None,
+    height: str | None = None,
+) -> dag.AgGrid:
+    """Build a dark-themed AgGrid from pre-formatted row dicts.
+
+    height=None lets the grid grow with its rows (autoHeight); pass a CSS
+    height for long scrollable tables.
+    """
+    grid_options: dict = {"theme": "legacy"}
+    style = {"width": "100%"}
+    if height is None:
+        grid_options["domLayout"] = "autoHeight"
+    else:
+        style["height"] = height
+
+    get_row_style = None
+    if row_style_conditions:
+        get_row_style = {"styleConditions": row_style_conditions}
+
+    return dag.AgGrid(
+        rowData=data,
+        columnDefs=[{"field": c, "headerName": c} for c in columns],
+        defaultColDef=_GRID_DEFAULT_COL,
+        columnSize="responsiveSizeToFit",
+        dashGridOptions=grid_options,
+        getRowStyle=get_row_style,
+        className=_GRID_THEME_CLASS,
+        style=style,
+    )
 
 
 def _empty_figure(title: str = "") -> go.Figure:
@@ -48,7 +90,7 @@ def build_metric_card(
     )
 
 
-def build_positions_table(positions: list[Position]) -> dash_table.DataTable:
+def build_positions_table(positions: list[Position]) -> dag.AgGrid:
     data = []
     for p in positions:
         data.append(
@@ -63,35 +105,17 @@ def build_positions_table(positions: list[Position]) -> dash_table.DataTable:
             }
         )
 
-    return dash_table.DataTable(
-        data=data,
-        columns=[{"name": c, "id": c} for c in ["Symbol", "Side", "Size", "Entry", "Current", "PnL", "Strategy"]],
-        style_table={"overflowX": "auto"},
-        style_header={
-            "backgroundColor": "#1e1e2f",
-            "color": "#fff",
-            "fontWeight": "bold",
-            "border": "1px solid #333",
-        },
-        style_cell={
-            "backgroundColor": "#16161d",
-            "color": "#fff",
-            "border": "1px solid #333",
-            "textAlign": "center",
-            "padding": "8px",
-        },
-        style_data_conditional=[
+    return _grid(
+        data,
+        ["Symbol", "Side", "Size", "Entry", "Current", "PnL", "Strategy"],
+        row_style_conditions=[
             {
-                "if": {
-                    "filter_query": '{Side} = "BUY"',
-                },
-                "color": "#00c853",
+                "condition": "params.data.Side == 'BUY'",
+                "style": {"color": "#00c853"},
             },
             {
-                "if": {
-                    "filter_query": '{Side} = "SELL"',
-                },
-                "color": "#ff1744",
+                "condition": "params.data.Side == 'SELL'",
+                "style": {"color": "#ff1744"},
             },
         ],
     )
@@ -246,7 +270,7 @@ def build_candlestick_chart(
     return fig
 
 
-def build_trade_history_table(trades: list[TradeRecord]) -> dash_table.DataTable:
+def build_trade_history_table(trades: list[TradeRecord]) -> dag.AgGrid:
     data = []
     for t in trades:
         data.append(
@@ -267,41 +291,25 @@ def build_trade_history_table(trades: list[TradeRecord]) -> dash_table.DataTable
     # Show newest trades first
     data = list(reversed(data))
 
-    return dash_table.DataTable(
-        data=data,
-        columns=[
-            {"name": c, "id": c}
-            for c in ["Symbol", "Side", "Entry", "Exit", "Qty", "PnL", "Fee", "Strategy", "Opened", "Closed"]
+    return _grid(
+        data,
+        ["Symbol", "Side", "Entry", "Exit", "Qty", "PnL", "Fee", "Strategy", "Opened", "Closed"],
+        row_style_conditions=[
+            # PnL color wins over side color: list order = priority
+            {
+                "condition": "params.data.PnL.includes('-')",
+                "style": {"color": "#ff1744"},
+            },
+            {
+                "condition": "params.data.Side == 'BUY'",
+                "style": {"color": "#00c853"},
+            },
         ],
-        style_table={
-            "overflowX": "auto",
-            "overflowY": "auto",
-            "maxHeight": "500px",
-        },
-        fixed_rows={"headers": True},
-        style_header={
-            "backgroundColor": "#1e1e2f",
-            "color": "#fff",
-            "fontWeight": "bold",
-            "border": "1px solid #333",
-        },
-        style_cell={
-            "backgroundColor": "#16161d",
-            "color": "#fff",
-            "border": "1px solid #333",
-            "textAlign": "center",
-            "padding": "8px",
-        },
-        style_data_conditional=[
-            {"if": {"filter_query": '{PnL} contains "-"'}, "color": "#ff1744"},
-            {"if": {"filter_query": '{Side} = "BUY"'}, "color": "#00c853"},
-        ],
-        sort_action="native",
-        page_action="none",
+        height="500px",
     )
 
 
-def build_performance_stats_table(stats_rows: list[dict]) -> dash_table.DataTable:
+def build_performance_stats_table(stats_rows: list[dict]) -> dag.AgGrid:
     """Per-strategy performance statistics (FABLE-012).
 
     stats_rows: list of dicts with a "name" key plus the output of
@@ -327,33 +335,27 @@ def build_performance_stats_table(stats_rows: list[dict]) -> dash_table.DataTabl
             }
         )
 
-    return dash_table.DataTable(
-        data=data,
-        columns=[
-            {"name": c, "id": c}
-            for c in [
-                "Strategy", "Trades", "Win Rate", "Net PnL", "Fees",
-                "Profit Factor", "Avg Win", "Avg Loss", "Expectancy",
-                "Max Loss Streak",
-            ]
+    return _grid(
+        data,
+        [
+            "Strategy", "Trades", "Win Rate", "Net PnL", "Fees",
+            "Profit Factor", "Avg Win", "Avg Loss", "Expectancy",
+            "Max Loss Streak",
         ],
-        style_table={"overflowX": "auto"},
-        style_header={
-            "backgroundColor": "#1e1e2f",
-            "color": "#fff",
-            "fontWeight": "bold",
-            "border": "1px solid #333",
-        },
-        style_cell={
-            "backgroundColor": "#16161d",
-            "color": "#fff",
-            "border": "1px solid #333",
-            "textAlign": "center",
-            "padding": "8px",
-        },
-        style_data_conditional=[
-            {"if": {"filter_query": '{Net PnL} contains "-"'}, "color": "#ff1744"},
-            {"if": {"filter_query": '{Strategy} = "TOTAL"'}, "fontWeight": "bold"},
+        row_style_conditions=[
+            # First match wins in ag-grid, so the combined case comes first
+            {
+                "condition": "params.data.Strategy == 'TOTAL' && params.data['Net PnL'].includes('-')",
+                "style": {"fontWeight": "bold", "color": "#ff1744"},
+            },
+            {
+                "condition": "params.data.Strategy == 'TOTAL'",
+                "style": {"fontWeight": "bold"},
+            },
+            {
+                "condition": "params.data['Net PnL'].includes('-')",
+                "style": {"color": "#ff1744"},
+            },
         ],
     )
 

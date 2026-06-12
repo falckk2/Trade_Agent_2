@@ -22,6 +22,7 @@ from src.engine.trading_engine import TradingEngine
 from src.exchange.blofin_exchange import BloFinExchange
 from src.execution.executor import OrderExecutor
 from src.portfolio.manager import PortfolioManager
+from src.portfolio.signal_log import SignalLogger
 from src.risk.manager import RiskManager
 from src.exchange.blofin_websocket import BloFinWebSocket
 from src.notifications.telegram import TelegramNotifier
@@ -113,6 +114,11 @@ def build_components(config: dict):
         data_dir=data_cfg.get("data_dir", "data"),
         event_bus=event_bus,
     )
+
+    # Durable signal log (FABLE-018): records WHY each trade happened —
+    # including webhook alert conditions — for per-condition reporting.
+    signal_logger = SignalLogger(data_dir=data_cfg.get("data_dir", "data"))
+    signal_logger.attach(event_bus)
 
     # Timeframe
     tf_str = engine_cfg.get("timeframe", "5m")

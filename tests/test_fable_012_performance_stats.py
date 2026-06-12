@@ -102,13 +102,13 @@ class TestStatsTable:
         ]
         rows.append({"name": "TOTAL", **pm.get_performance_stats()})
         table = build_performance_stats_table(rows)
-        assert len(table.data) == 3
-        assert table.data[-1]["Strategy"] == "TOTAL"
-        assert table.data[-1]["Trades"] == 4
+        assert len(table.rowData) == 3
+        assert table.rowData[-1]["Strategy"] == "TOTAL"
+        assert table.rowData[-1]["Trades"] == 4
 
     def test_inf_profit_factor_rendered_as_symbol(self, tmp_path):
         manager = PortfolioManager(data_dir=str(tmp_path))
         manager._trade_history.append(_trade(100.0))
         rows = [{"name": "s1", **manager.get_performance_stats()}]
         table = build_performance_stats_table(rows)
-        assert table.data[0]["Profit Factor"] == "∞"
+        assert table.rowData[0]["Profit Factor"] == "∞"

@@ -3,6 +3,7 @@
 import logging
 from typing import TYPE_CHECKING
 
+import dash_ag_grid as dag
 from dash import Dash
 
 from src.core.enums import TimeFrame
@@ -32,6 +33,9 @@ def create_app(
         __name__,
         title="Trade Agent 2",
         update_title=None,  # Disable "Updating..." title
+        # Legacy CSS theme for the ag-grid tables (FABLE-016): the quartz
+        # stylesheet also contains the -dark variant used in components.py.
+        external_stylesheets=[dag.themes.QUARTZ],
     )
 
     app.layout = create_layout(symbols, strategy_names, refresh_interval_ms=refresh_interval_ms)

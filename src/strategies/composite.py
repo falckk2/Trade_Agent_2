@@ -58,11 +58,29 @@ class CompositeStrategy(IStrategy):
         }
 
         if self._mode == AggregationMode.UNANIMOUS:
-            return self._aggregate_unanimous(signals)
+            result = self._aggregate_unanimous(signals)
         elif self._mode == AggregationMode.MAJORITY:
-            return self._aggregate_majority(signals)
+            result = self._aggregate_majority(signals)
         else:
-            return self._aggregate_weighted(signals)
+            result = self._aggregate_weighted(signals)
+
+        # Preserve contributing child signals in the aggregate's metadata so
+        # downstream consumers (signal log, per-condition performance reports)
+        # can attribute the trade to the originating signal — e.g. a webhook
+        # alert's `condition` would otherwise be lost in aggregation.
+        if result.signal_type != SignalType.HOLD:
+            contributing = {
+                strategy.name: {
+                    "signal_type": sig.signal_type.value,
+                    "strength": sig.strength,
+                    "metadata": dict(sig.metadata),
+                }
+                for (strategy, _), (sig, _) in zip(self._children, signals)
+                if sig.signal_type != SignalType.HOLD
+            }
+            if contributing:
+                result.metadata["children_signals"] = contributing
+        return result
 
     def _aggregate_unanimous(
         self, signals: list[tuple[Signal, float]]

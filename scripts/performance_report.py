@@ -28,6 +28,11 @@ import yaml
 from src.backtest.engine import Backtester
 from src.core.models import Candle
 from src.portfolio.manager import PortfolioManager
+from src.portfolio.signal_log import (
+    extract_condition_events,
+    load_signal_log,
+    split_trades_by_condition,
+)
 from src.portfolio.stats import compute_performance_stats
 from src.strategies.factory import StrategyFactory
 
@@ -87,7 +92,11 @@ def main() -> None:
 
     for entry in entries:
         name = entry["name"]
-        trades_all = pm.get_trade_history(name)
+        # Substring match so trades attributed to "composite[a,b]" count for
+        # every contributing strategy (one symbol covered by >1 strategies).
+        trades_all = [
+            t for t in pm.get_trade_history() if name in (t.strategy_name or "")
+        ]
         print(f"=== {name} ({entry['type']}, "
               f"{'ENABLED' if entry.get('enabled') else 'disabled'}) ===")
         print(header)
@@ -98,14 +107,30 @@ def main() -> None:
             ]
             print(f"{label:<28} {_fmt(compute_performance_stats(trades))}")
 
-        strategy = factory.get_instance(name)
-        for symbol in entry.get("symbols", []):
-            candles = load_candles(symbol, timeframe, window_start)
-            if strategy and len(candles) > 60:
-                result = backtester.run(strategy, candles, symbol=symbol)
-                print(f"{f'sim: {args.days}d {symbol}':<28} {_fmt(result.stats)}")
+        if entry.get("type") == "webhook":
+            # Webhook strategies cannot be simulated; instead break live
+            # results down by the alert condition that triggered each trade
+            # (FABLE-018 — "which MarketCipher signal earns its keep?").
+            events = extract_condition_events(
+                load_signal_log(Path(args.data_dir) / "signal_log.csv"), name
+            )
+            if not trades_all:
+                print(f"{'by condition':<28} no trades attributed yet")
             else:
-                print(f"{f'sim: {symbol}':<28} insufficient candle data")
+                for condition, group in sorted(
+                    split_trades_by_condition(trades_all, events).items()
+                ):
+                    print(f"{f'condition: {condition}':<28} "
+                          f"{_fmt(compute_performance_stats(group))}")
+        else:
+            strategy = factory.get_instance(name)
+            for symbol in entry.get("symbols", []):
+                candles = load_candles(symbol, timeframe, window_start)
+                if strategy and len(candles) > 60:
+                    result = backtester.run(strategy, candles, symbol=symbol)
+                    print(f"{f'sim: {args.days}d {symbol}':<28} {_fmt(result.stats)}")
+                else:
+                    print(f"{f'sim: {symbol}':<28} insufficient candle data")
         print()
 
     total = compute_performance_stats(pm.get_trade_history())
