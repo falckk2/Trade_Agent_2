@@ -15,8 +15,9 @@ and keep BOTH summary blocks' counts current.
 ## Summary (combined)
 - Total Issues: 61 (43 ISSUE + 18 FABLE)
 - Critical: 5 | High: 15 | Medium: 26 | Low: 15
-- Open: 0 | Investigating: 0 | Fix Attempted: 7 | Fix Failed: 0 | Resolved: 54
-- Fix Attempted, awaiting real-world confirmation: ISSUE-041 + FABLE-016 (browser check of dashboard tables), FABLE-008 (event-driven redesign, deferred by choice), FABLE-011 (real Telegram delivery), FABLE-015 (observed crash-restart; VPS install), FABLE-017 (real TradingView-originated alert), FABLE-018 (report scheduling — user decision)
+- Open: 0 | Investigating: 0 | Fix Attempted: 6 | Fix Failed: 0 | Resolved: 55
+- Fix Attempted, awaiting real-world confirmation: ISSUE-041 + FABLE-016 (browser check of dashboard tables), FABLE-008 (event-driven redesign, deferred by choice), FABLE-011 (real Telegram delivery), FABLE-017 (real TradingView-originated alert), FABLE-018 (report scheduling — user decision)
+- _2026-06-12: FABLE-015 RESOLVED — crash-restart verified live (`kill -9` → systemd restart in 11 s with full state recovery; boot auto-start also observed same day after overnight WSL shutdown)._
 
 ## Summary (ISSUE register)
 - Total Issues: 43
@@ -1947,7 +1948,8 @@ Found during a full-codebase review by Claude (Fable 5) starting 2026-06-10. The
 ## Summary (FABLE register)
 - Total Issues: 18
 - Critical: 1 | High: 3 | Medium: 9 | Low: 5
-- Open: 0 | Investigating: 0 | Fix Attempted: 6 | Fix Failed: 0 | Resolved: 12
+- Open: 0 | Investigating: 0 | Fix Attempted: 5 | Fix Failed: 0 | Resolved: 13
+- _2026-06-12: FABLE-015 promoted to Resolved after observed boot auto-start (overnight WSL shutdown → started on boot) and a verified crash-restart (`kill -9` → systemd restarted in 11 s, trades/watermark/enabled-strategies all recovered from disk)._
 - _Eighth pass 2026-06-11 (evening): FABLE-016 fix attempted — all three dashboard tables migrated from deprecated `dash_table.DataTable` to dash-ag-grid 35.2 (DeprecationWarning gone; visual browser check pending). FABLE-018 extended with per-condition attribution: `SignalLogger` → `data/signal_log.csv` records WHY each trade happened, `CompositeStrategy` now preserves contributing child metadata (webhook alert conditions survive aggregation), and `performance_report.py` gains a per-condition breakdown for webhook strategies plus composite-aware substring trade attribution. pytest → 454 passed, 8 skipped._
 - _Eighth pass 2026-06-11 (bug-hunter verification): Reviewed all 13 Fix-Attempted issues against current code + tests (full suite 444 passed, 8 skipped). Promoted to Resolved: FABLE-004, 005, 006, 007, 009, 010, 012, 014 — each verified by code inspection and its dedicated test file, with no outstanding live/external verification. Held at Fix Attempted (each has a stated remaining acceptance criterion): FABLE-008 (event-driven redesign unbuilt — only the config mitigation landed), FABLE-011 (real Telegram delivery unobserved), FABLE-015 (automatic crash-restart unobserved; VPS system-unit pending), FABLE-017 (real TradingView-originated alert pending), FABLE-018 (the "action"/scheduling half of the feedback loop unbuilt). No fixes failed or regressed; no statuses demoted. Note: `systemctl --user`/`journalctl` runtime checks were not permitted in this environment, so FABLE-015 runtime supervision state could not be re-confirmed live._
 - _Seventh pass 2026-06-11 (afternoon): FABLE-017 verified end-to-end on demo — local curl alert → next-tick order with TP/SL attached → close alert → position closed and recorded; public path verified through a cloudflared quick tunnel (health OK, bad secret 401). Webhook receiver + `tv_marketcipher_btc` now ENABLED in config for the testing phase. FABLE-015 fix attempted: `deploy/trade-agent.service` created and installed as a local user unit with linger (motivated by the overnight WSL shutdown killing the trial mid-drain); bot now supervised under journald. Observation: demo WS still reconnects ~every 5-6 min (recovers in ~5 s, 1 attempt, no storm) — looks like server-side connection cycling, tolerable but worth watching._
@@ -2299,7 +2301,7 @@ Add an optional `enabled: true|false` (default false) per strategy entry in `con
 ---
 
 ### FABLE-015: No process supervision — a crash at 3am stays down until someone notices
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: MEDIUM
 - **Category**: Operations
 - **File(s)**: `deploy/trade-agent.service`
@@ -2315,6 +2317,7 @@ Add a systemd user unit (`docs/trade-agent.service` or `deploy/`): `Restart=on-f
 **Fix History**:
 - **[2026-06-11] Fix attempted by Fable 5**: Motivating incident: the overnight demo trial was killed by WSL shutdown at 23:37 (SIGTERM mid-drain, no restart). Created `deploy/trade-agent.service` (`Restart=always`, `RestartSec=10`, `TimeoutStopSec=90` so the SIGTERM drain can close positions; install instructions for both VPS system unit and WSL user unit in the file header). Installed locally as a user unit: `systemctl --user enable --now trade-agent` + `loginctl enable-linger rehan` (Linger=yes confirmed) — the demo trial now runs supervised under journald (`journalctl --user -u trade-agent`). Remaining for Resolved: observe an automatic restart after a real crash, and install the system-unit variant on the VPS when FABLE-017 deploys there. Note: linger keeps the bot alive without a session, but a full WSL VM shutdown still kills it — true 24/7 needs the VPS.
 - **[2026-06-11] Verified by bug-hunter — remains Fix Attempted**: `deploy/trade-agent.service` is present and correct — `Restart=always`, `RestartSec=10`, `KillSignal=SIGTERM`, `TimeoutStopSec=90` (allows the SIGTERM drain to close positions), `WantedBy=multi-user.target`, plus header install instructions for both the VPS system unit and the WSL user-unit variant. Holding at Fix Attempted per the prior note: the remaining acceptance criterion — observing an automatic restart after a real crash — has not been demonstrated, and the system-unit install on the VPS is pending. (Tried to confirm runtime state via `systemctl --user`/`journalctl`, but those calls are not permitted in this environment.) Promote once an automatic crash-restart is observed in journald.
+- **[2026-06-12] Crash-restart observed — RESOLVED**: two real supervision events now on record. (1) Boot auto-start: WSL was shut down overnight; on boot at 11:07 the unit started the bot with no human action (linger + enabled unit). (2) Crash recovery: simulated a hard crash with `kill -9` on the main PID (verified zero open positions first) — journald shows `Main process exited, code=killed, status=9/KILL` at 16:29:05 and `Scheduled restart job, restart counter is at 1` with full recovery 11 s later: 87 trades reloaded from CSV, drawdown high-watermark restored from `initial_equity.json`, both SMA strategies re-enabled from yaml flags (FABLE-014), webhook receiver and dashboard healthy. The only remaining sub-item — installing the system-unit variant on the VPS — is part of the FABLE-017 VPS deployment, tracked there and in user_input_needed.md item 2. RESULT: PASS.
 
 ---
 
