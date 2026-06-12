@@ -78,6 +78,44 @@ class PortfolioManager(IPortfolioManager):
             event_bus.subscribe(EventType.ORDER_FILLED, self._on_order_filled)
 
         self._load_trade_history()
+        self._load_equity_curve()
+
+    def _load_equity_curve(self) -> None:
+        """Seed _snapshots from equity_curve.csv so the dashboard equity chart
+        survives restarts (supervised restarts are routine since FABLE-015).
+
+        Loaded snapshots carry equity/PnL only — positions and per-strategy
+        maps stay empty, which matches how the chart consumes them. The live
+        tick replaces the head of the curve within one interval.
+        """
+        filepath = self._data_dir / "equity_curve.csv"
+        if not filepath.exists():
+            return
+        loaded: list[PortfolioSnapshot] = []
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        loaded.append(
+                            PortfolioSnapshot(
+                                timestamp=datetime.fromisoformat(row["timestamp"]),
+                                total_equity=float(row["total_equity"]),
+                                unrealized_pnl=float(row["unrealized_pnl"]),
+                                realized_pnl=float(row["realized_pnl"]),
+                            )
+                        )
+                    except (KeyError, ValueError):
+                        continue  # skip malformed rows, keep the rest
+        except Exception:
+            logger.exception("Failed to load equity curve from %s", filepath)
+            return
+        with self._lock:
+            # Same retention cap as the live path in update()
+            self._snapshots = loaded[-10000:]
+        if loaded:
+            logger.info(
+                "Loaded %d equity-curve snapshots from %s", len(loaded), filepath
+            )
 
     def update(
         self, positions: list[Position], balance: dict[str, float]

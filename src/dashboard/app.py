@@ -33,9 +33,11 @@ def create_app(
         __name__,
         title="Trade Agent 2",
         update_title=None,  # Disable "Updating..." title
-        # Legacy CSS theme for the ag-grid tables (FABLE-016): the quartz
-        # stylesheet also contains the -dark variant used in components.py.
-        external_stylesheets=[dag.themes.QUARTZ],
+        # Legacy CSS theme for the ag-grid tables (FABLE-016): BASE is the
+        # required structural stylesheet (without it grids render as stacked
+        # plain text); QUARTZ also contains the -dark variant used in
+        # components.py.
+        external_stylesheets=[dag.themes.BASE, dag.themes.QUARTZ],
     )
 
     app.layout = create_layout(symbols, strategy_names, refresh_interval_ms=refresh_interval_ms)

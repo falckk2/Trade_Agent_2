@@ -15,14 +15,15 @@ and keep BOTH summary blocks' counts current.
 ## Summary (combined)
 - Total Issues: 61 (43 ISSUE + 18 FABLE)
 - Critical: 5 | High: 15 | Medium: 26 | Low: 15
-- Open: 0 | Investigating: 0 | Fix Attempted: 6 | Fix Failed: 0 | Resolved: 55
-- Fix Attempted, awaiting real-world confirmation: ISSUE-041 + FABLE-016 (browser check of dashboard tables), FABLE-008 (event-driven redesign, deferred by choice), FABLE-011 (real Telegram delivery), FABLE-017 (real TradingView-originated alert), FABLE-018 (report scheduling — user decision)
+- Open: 0 | Investigating: 0 | Fix Attempted: 4 | Fix Failed: 0 | Resolved: 57
+- Fix Attempted, awaiting real-world confirmation: FABLE-008 (event-driven redesign, deferred by choice), FABLE-011 (real Telegram delivery), FABLE-017 (real TradingView-originated alert), FABLE-018 (report scheduling — user decision)
+- _2026-06-12 (later): ISSUE-041 + FABLE-016 RESOLVED via headless-browser visual check (playwright screenshots of all three dashboard grids; found+fixed missing AG Grid structural stylesheet in the process). Dashboard equity curve now survives restarts (`PortfolioManager._load_equity_curve` seeds from equity_curve.csv; 6 new tests)._
 - _2026-06-12: FABLE-015 RESOLVED — crash-restart verified live (`kill -9` → systemd restart in 11 s with full state recovery; boot auto-start also observed same day after overnight WSL shutdown)._
 
 ## Summary (ISSUE register)
 - Total Issues: 43
 - Critical: 4 | High: 12 | Medium: 17 | Low: 10
-- Open: 0 | Investigating: 0 | Fix Attempted: 1 | Fix Failed: 0 | Resolved: 42
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 43
 - _2026-06-10 (second pass): ISSUE-040 and ISSUE-042 resolved (units fix + 10 regression tests in tests/test_issue_032_to_040_regressions.py). ISSUE-043 resolved: root cause was the ping-on-receive-timeout design losing the race with the server's ~30s ping deadline (inbound data does not reset it — measured); fixed with a fixed 15s ping cadence and verified by a 10-min soak (1 reconnect vs ~16 expected). **Zero Open issues remain**; ISSUE-041 stays Fix Attempted pending visual dashboard check._
 - _2026-06-10: ISSUE-041 fixed by Fable 5 alongside dashboard work tracked in fable_issues.md (FABLE-012). ISSUE-040/042/043 remain open; note FABLE-002 (async SDK fix, see fable_issues.md) likely reduces ISSUE-043 reconnect frequency — re-measure on next live trial._
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
@@ -1861,7 +1862,7 @@ Apply the same `* contract_value` conversion to `quantity` in `_parse_order`, co
 ---
 
 ### ISSUE-041: Dashboard trade history table does not display the `fee` column
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Configuration Error
 - **File(s)**: `src/dashboard/callbacks.py`, `src/dashboard/components.py` (or equivalent table builder)
@@ -1876,6 +1877,7 @@ Add `fee` column to the trade history table component. Also consider adding a cu
 
 **Fix History**:
 - **[2026-06-10] Fix attempted by Fable 5 (while implementing FABLE-012, see fable_issues.md)**: Added a "Fee" column (`${t.fee:,.4f}`) to `build_trade_history_table` in `src/dashboard/components.py`, between PnL and Strategy. Cumulative fees are also now visible per strategy in the new Performance Statistics table ("Fees" column, FABLE-012), which covers the cumulative-fees suggestion. No dedicated test (display-only); covered indirectly by `tests/test_fable_012_performance_stats.py` table tests. pytest tests/ → 363 passed, 8 skipped.
+- **[2026-06-12] Visual check done — RESOLVED**: rendered the live dashboard in headless chromium (playwright) and inspected the screenshot: the Trade History grid shows the Fee column populated per trade ($1.2222, $1.2270, …) between PnL and Strategy, and the Performance Statistics grid shows cumulative Fees per strategy. Verified post-FABLE-016 (the table is now ag-grid, same columns). RESULT: PASS.
 
 ---
 
@@ -1948,7 +1950,7 @@ Found during a full-codebase review by Claude (Fable 5) starting 2026-06-10. The
 ## Summary (FABLE register)
 - Total Issues: 18
 - Critical: 1 | High: 3 | Medium: 9 | Low: 5
-- Open: 0 | Investigating: 0 | Fix Attempted: 5 | Fix Failed: 0 | Resolved: 13
+- Open: 0 | Investigating: 0 | Fix Attempted: 4 | Fix Failed: 0 | Resolved: 14
 - _2026-06-12: FABLE-015 promoted to Resolved after observed boot auto-start (overnight WSL shutdown → started on boot) and a verified crash-restart (`kill -9` → systemd restarted in 11 s, trades/watermark/enabled-strategies all recovered from disk)._
 - _Eighth pass 2026-06-11 (evening): FABLE-016 fix attempted — all three dashboard tables migrated from deprecated `dash_table.DataTable` to dash-ag-grid 35.2 (DeprecationWarning gone; visual browser check pending). FABLE-018 extended with per-condition attribution: `SignalLogger` → `data/signal_log.csv` records WHY each trade happened, `CompositeStrategy` now preserves contributing child metadata (webhook alert conditions survive aggregation), and `performance_report.py` gains a per-condition breakdown for webhook strategies plus composite-aware substring trade attribution. pytest → 454 passed, 8 skipped._
 - _Eighth pass 2026-06-11 (bug-hunter verification): Reviewed all 13 Fix-Attempted issues against current code + tests (full suite 444 passed, 8 skipped). Promoted to Resolved: FABLE-004, 005, 006, 007, 009, 010, 012, 014 — each verified by code inspection and its dedicated test file, with no outstanding live/external verification. Held at Fix Attempted (each has a stated remaining acceptance criterion): FABLE-008 (event-driven redesign unbuilt — only the config mitigation landed), FABLE-011 (real Telegram delivery unobserved), FABLE-015 (automatic crash-restart unobserved; VPS system-unit pending), FABLE-017 (real TradingView-originated alert pending), FABLE-018 (the "action"/scheduling half of the feedback loop unbuilt). No fixes failed or regressed; no statuses demoted. Note: `systemctl --user`/`journalctl` runtime checks were not permitted in this environment, so FABLE-015 runtime supervision state could not be re-confirmed live._
@@ -2322,7 +2324,7 @@ Add a systemd user unit (`docs/trade-agent.service` or `deploy/`): `Restart=on-f
 ---
 
 ### FABLE-016: Dash DataTable deprecation — dashboard tables need eventual migration to dash-ag-grid
-- **Status**: Fix Attempted
+- **Status**: Resolved
 - **Severity**: LOW
 - **Category**: Maintenance / Dependency
 - **File(s)**: `src/dashboard/components.py`, `src/dashboard/app.py`, `pyproject.toml`
@@ -2337,6 +2339,7 @@ No action until a Dash major-version bump is planned. When migrating: `pip insta
 
 **Fix History**:
 - **[2026-06-11] Fix attempted by Fable 5**: installed dash-ag-grid 35.2.0; replaced all three `dash_table.DataTable` builders in `src/dashboard/components.py` with a shared `_grid()` helper returning `dag.AgGrid` (legacy CSS theming — AG Grid v33+ defaults to the JS Theming API, so `dashGridOptions={"theme": "legacy"}` + `ag-theme-quartz-dark` class; quartz stylesheet loaded app-wide via `external_stylesheets=[dag.themes.QUARTZ]` in app.py). Conditional row styling moved to `getRowStyle.styleConditions` (first-match-wins, so the TOTAL+negative combined rule is listed first). pyproject: `dash>=2.14,<5` pinned, `dash-ag-grid>=31.0` added. `tests/test_fable_012_performance_stats.py` assertions updated (`.data` → `.rowData`). DeprecationWarning gone from pytest output; 454 passed, 8 skipped. Pending for Resolved: visual check of the three tables in a browser (positions, trade history, per-strategy stats).
+- **[2026-06-12] Visual check done — RESOLVED (with one bug found and fixed)**: rendered the live dashboard headlessly (playwright + chromium-headless-shell; missing system libs extracted to `~/.local/lib/chrome-deps`, run with `LD_LIBRARY_PATH` — no sudo needed). First screenshot caught a real bug: grids rendered as stacked plain text because only the theme stylesheet was loaded — AG Grid's legacy theming ALSO requires the structural stylesheet. Fix: `external_stylesheets=[dag.themes.BASE, dag.themes.QUARTZ]` in app.py. Re-rendered and inspected all three grids: positions (dark themed header, correct empty state), performance stats (red negatives, bold TOTAL row), trade history (all 10 columns incl. Fee, red/green conditional rows, newest first). RESULT: PASS.
 
 ---
 

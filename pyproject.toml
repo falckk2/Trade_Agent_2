@@ -25,6 +25,10 @@ dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
+    # Headless dashboard screenshots (visual checks). After install run
+    # `playwright install chromium`; on WSL without sudo the missing system
+    # libs live in ~/.local/lib/chrome-deps (see issues.md FABLE-016).
+    "playwright>=1.60",
 ]
 
 [tool.pytest.ini_options]
