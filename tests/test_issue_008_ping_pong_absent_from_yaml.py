@@ -47,7 +47,7 @@ class TestPingPongAbsentFromYaml:
 
         Roster updated 2026-06-10: RSI strategies removed after the backtest
         sweep showed them net-negative across the whole parameter grid
-        (see FABLE-010 in fable_issues.md); SMA crossovers kept.
+        (see FABLE-010 in issues.md); SMA crossovers kept.
         """
         names = [s.get("name") for s in strategies_list]
         assert "sma_crossover_btc" in names
