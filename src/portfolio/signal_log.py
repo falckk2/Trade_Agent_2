@@ -10,6 +10,7 @@ The module-level helpers join this log back to closed trades so reports can
 answer "which alert condition actually makes money?".
 """
 
+import asyncio
 import csv
 import json
 import logging
@@ -37,6 +38,15 @@ class SignalLogger:
         event_bus.subscribe(EventType.SIGNAL_GENERATED, self._on_signal)
 
     def _on_signal(self, event: Event) -> None:
+        """Sync callback — offloads file I/O to a thread to avoid blocking
+        the async event loop (ISSUE-046).
+
+        The CSV write is small (~1 row) but synchronous file I/O inside
+        EventBus.publish stalls every subsequent subscriber and can delay
+        WebSocket ping scheduling. We offload to a thread via
+        asyncio.run_coroutine_threadsafe when a running loop exists; otherwise
+        fall back to a direct write (e.g. in sync test contexts).
+        """
         signal = (event.payload or {}).get("signal")
         if signal is None:
             return
@@ -48,6 +58,16 @@ class SignalLogger:
             f"{signal.strength:.4f}",
             json.dumps(signal.metadata, default=str),
         ]
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — write directly (test context)
+            self._write_row(row)
+            return
+        loop.run_in_executor(None, self._write_row, row)
+
+    def _write_row(self, row: list) -> None:
+        """Append a single row to signal_log.csv (thread-safe via _lock)."""
         try:
             with self._lock:
                 self._filepath.parent.mkdir(parents=True, exist_ok=True)

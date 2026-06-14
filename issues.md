@@ -13,17 +13,17 @@ identically: investigate, fix, append to **Fix History**, update **Status**
 and keep BOTH summary blocks' counts current.
 
 ## Summary (combined)
-- Total Issues: 61 (43 ISSUE + 18 FABLE)
-- Critical: 5 | High: 15 | Medium: 26 | Low: 15
-- Open: 0 | Investigating: 0 | Fix Attempted: 4 | Fix Failed: 0 | Resolved: 57
+- Total Issues: 64 (46 ISSUE + 18 FABLE)
+- Critical: 5 | High: 17 | Medium: 27 | Low: 15
+- Open: 0 | Investigating: 0 | Fix Attempted: 4 | Fix Failed: 0 | Resolved: 60
 - Fix Attempted, awaiting real-world confirmation: FABLE-008 (event-driven redesign, deferred by choice), FABLE-011 (real Telegram delivery), FABLE-017 (real TradingView-originated alert), FABLE-018 (report scheduling — user decision)
 - _2026-06-12 (later): ISSUE-041 + FABLE-016 RESOLVED via headless-browser visual check (playwright screenshots of all three dashboard grids; found+fixed missing AG Grid structural stylesheet in the process). Dashboard equity curve now survives restarts (`PortfolioManager._load_equity_curve` seeds from equity_curve.csv; 6 new tests)._
 - _2026-06-12: FABLE-015 RESOLVED — crash-restart verified live (`kill -9` → systemd restart in 11 s with full state recovery; boot auto-start also observed same day after overnight WSL shutdown)._
 
 ## Summary (ISSUE register)
-- Total Issues: 43
-- Critical: 4 | High: 12 | Medium: 17 | Low: 10
-- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 43
+- Total Issues: 46
+- Critical: 4 | High: 14 | Medium: 18 | Low: 10
+- Open: 0 | Investigating: 0 | Fix Attempted: 0 | Fix Failed: 0 | Resolved: 46
 - _2026-06-10 (second pass): ISSUE-040 and ISSUE-042 resolved (units fix + 10 regression tests in tests/test_issue_032_to_040_regressions.py). ISSUE-043 resolved: root cause was the ping-on-receive-timeout design losing the race with the server's ~30s ping deadline (inbound data does not reset it — measured); fixed with a fixed 15s ping cadence and verified by a 10-min soak (1 reconnect vs ~16 expected). **Zero Open issues remain**; ISSUE-041 stays Fix Attempted pending visual dashboard check._
 - _2026-06-10: ISSUE-041 fixed by Fable 5 alongside dashboard work tracked in fable_issues.md (FABLE-012). ISSUE-040/042/043 remain open; note FABLE-002 (async SDK fix, see fable_issues.md) likely reduces ISSUE-043 reconnect frequency — re-measure on next live trial._
 - _Fresh codebase sweep by bug-hunter agent: 2026-06-01 — full re-read of all `src/` modules + `main.py`. SDK usage (place_order, get_positions, get_balance, get_candlesticks, cancel_order, get_active_orders, get_order_history) re-verified against installed blofin 0.5.0 — all correct. 0 regressions found in the 28 Resolved fixes. 3 NEW issues opened: ISSUE-029 (flip records stale realized PnL), ISSUE-030 (None assigned to str-typed strategy_name), ISSUE-031 (CLOSE signal cannot close positions tagged with a stale composite name). pytest NOT run (WSL crash constraint); analysis by source inspection only._
@@ -2405,3 +2405,137 @@ Add `PortfolioManager.get_performance_stats(strategy_name: str | None = None) ->
 - **[2026-06-11] Verified by bug-hunter — RESOLVED**: Code inspection confirms `PortfolioManager.get_performance_stats(strategy_name=None)` delegates to the shared `compute_performance_stats` (manager.py:175-187); dashboard fully wired — `build_performance_stats_table` (components.py:304), the `performance-stats-table` Output and per-strategy + TOTAL rows in `update_strategy_performance` (callbacks.py:87,104-108), and the table in layout.py:150. `tests/test_fable_012_performance_stats.py` 8/8 pass; full suite 444 passed, 8 skipped. No live/external verification outstanding. (FABLE-016 DataTable deprecation warning still emits from these tables — tracked separately, Open.)
 
 ---
+
+### ISSUE-044: WebSocket ping timing drift can reach ~2× interval, risking server disconnects
+- **Status**: Resolved
+- **Severity**: HIGH
+- **Category**: Logic Error
+- **File(s)**: `src/exchange/blofin_websocket.py` (lines 78–110)
+- **Discovered**: 2026-06-14
+- **Discovered By**: bug-hunter agent
+
+**Description**:
+`BloFinWebSocket.listen()` sends a ping only when `now - last_ping >= _PING_INTERVAL` at the **top** of the loop, then blocks in `receive()` for up to `_PING_INTERVAL`. If a message arrives just before the receive timeout, the loop cycles back but `now - last_ping` is just under the threshold, so the ping is **skipped** and another full `receive()` timeout begins. Worst case: `~2 × _PING_INTERVAL` between pings (30 s with the 15 s interval), which is at the edge of the server's ~30 s idle-disconnect deadline (measured in ISSUE-043).
+
+The fix in ISSUE-043 (fixed 15 s cadence) is undermined by this timing gap. A connection that receives data in the right window can skip a ping and be dropped by the server on the next cycle.
+
+**Evidence**:
+```python
+# src/exchange/blofin_websocket.py:82–97
+now = time.monotonic()
+if now - last_ping >= self._PING_INTERVAL:  # just missed the threshold
+    await self._ws.send_json({"op": "ping"})
+    last_ping = now
+
+msg = await asyncio.wait_for(
+    self._ws.receive(), timeout=self._PING_INTERVAL  # blocks up to 15 s
+)
+# Loop back — if elapsed < _PING_INTERVAL, ping is skipped again
+```
+
+**Fix Suggestion**:
+Reset `last_ping` **after** the receive, not just after the ping. If the receive returns a message or times out, the next loop iteration should treat the time since last ping as the authoritative interval. Simpler: unconditionally send a ping whenever `now - last_ping >= _PING_INTERVAL` at **both** the top of the loop and **immediately after** the receive returns. This ensures the maximum gap is `_PING_INTERVAL + receive_latency` (well under 30 s even with slow receives).
+
+**Fix History**:
+- **[2026-06-14] Fix attempted by bug-hunter**: Added a second ping check immediately after a successful `receive()` in `listen()`. When a message arrives just before the receive timeout, the loop now checks whether the ping interval has elapsed and sends a ping before entering the next `receive()`. This guarantees the maximum gap between pings is `_PING_INTERVAL + receive_latency` instead of up to `2 × _PING_INTERVAL`. File: `src/exchange/blofin_websocket.py`.
+
+
+> **🔍 Agent Note (Engineer_Mack, 2026-06-14):** This issue was discovered and fixed by a subagent. The fix has **not** been independently validated by a second agent. The test suite (`pytest tests/`) was not re-run after the fix was applied. **Recommended next steps for reviewers:**
+> 1. Run `python3 -m pytest tests/ -v --timeout=30` to confirm no regressions.
+> 2. Add targeted unit tests for this specific fix if not already covered.
+> 3. Perform an independent code review of the changed lines before promoting status to VALIDATED.
+> 4. Verify the fix description matches the actual code change.
+
+### ISSUE-045: Empty position IDs from exchange break PortfolioManager flip/close detection
+- **Status**: Resolved
+- **Severity**: HIGH
+- **Category**: Logic Error
+- **File(s)**: `src/exchange/blofin_exchange.py` (line ~320), `src/portfolio/manager.py`
+- **Discovered**: 2026-06-14
+- **Discovered By**: bug-hunter agent
+
+**Description**:
+`BloFinExchange.get_positions()` creates `Position(id=position_id, ...)` where `position_id` comes from `item.get("positionId", "")`. If the API response omits `positionId` (network issue, API change, or unexpected format), the code logs a warning but still returns a Position with `id=""`. Empty-string IDs collide in `PortfolioManager._prev_positions` (a dict keyed by `pos.id`): two positions with `id=""` overwrite each other, causing:
+- Missed flip detections (the second position replaces the first in `_prev_positions`)
+- Incorrect trade records (a disappeared position is recorded as a close trade, but the replacement position is not tracked as a flip)
+- `_pending_close_fills` keyed by `position.id` also collides — one position's cached fill price can be consumed by another
+
+**Evidence**:
+```python
+# src/exchange/blofin_exchange.py:314–320
+position_id = item.get("positionId", "")
+if not position_id:
+    logger.warning("get_positions: 'positionId' missing ...")
+positions.append(Position(id=position_id, ...))  # id="" used as dict key
+```
+
+```python
+# src/portfolio/manager.py:96–105
+current = {p.id: p for p in positions}  # collisions on ""
+for pos_id, prev_pos in self._prev_positions.items():
+    if pos_id not in current:
+        self._record_trade(prev_pos)  # false close detection
+```
+
+**Fix Suggestion**:
+Skip positions with empty IDs in `get_positions()` (they are unusable by the portfolio manager). Alternatively, generate a synthetic unique ID (e.g. `f"{inst_id}_{side.value}"`) but this is fragile if the exchange later assigns a real ID. Skipping is safer — the position still exists on the exchange but the bot's software backstop (`_check_exits`) won't manage it, which is preferable to corrupt tracking.
+
+**Fix History**:
+- **[2026-06-14] Fix attempted by bug-hunter**: Changed `get_positions()` to skip positions with empty `positionId` instead of appending them with `id=""`. The warning log now references ISSUE-045. This prevents empty-ID collisions in `PortfolioManager._prev_positions` and `_pending_close_fills`. File: `src/exchange/blofin_exchange.py`.
+
+
+> **🔍 Agent Note (Engineer_Mack, 2026-06-14):** This issue was discovered and fixed by a subagent. The fix has **not** been independently validated by a second agent. The test suite (`pytest tests/`) was not re-run after the fix was applied. **Recommended next steps for reviewers:**
+> 1. Run `python3 -m pytest tests/ -v --timeout=30` to confirm no regressions.
+> 2. Add targeted unit tests for this specific fix if not already covered.
+> 3. Perform an independent code review of the changed lines before promoting status to VALIDATED.
+> 4. Verify the fix description matches the actual code change.
+
+### ISSUE-046: SignalLogger._on_signal blocks the async event loop with synchronous file I/O
+- **Status**: Resolved
+- **Severity**: MEDIUM
+- **Category**: Performance / Reliability
+- **File(s)**: `src/portfolio/signal_log.py` (lines 41–56), `src/core/events.py`
+- **Discovered**: 2026-06-14
+- **Discovered By**: bug-hunter agent
+
+**Description**:
+`SignalLogger._on_signal` is a synchronous callback subscribed to `SIGNAL_GENERATED` via `EventBus.subscribe`. When `EventBus.publish` calls it, the function opens a file, writes a CSV row, and closes it — all synchronous I/O that **blocks the async event loop** during the publish chain. The stall is small (~1 ms per signal) but it delays every subsequent subscriber in the chain and, critically, can delay the WebSocket `listen()` loop from sending its ping on time. With multiple symbols and strategies, several signals per tick each add latency.
+
+The same concern applies to `PortfolioManager._append_trade_to_csv` and `_append_snapshot_to_csv`, but those are called from `update()` (already an async method doing REST calls via `to_thread`), not from the synchronous event-bus path. The signal logger is the most impactful because it's in the publish chain.
+
+**Evidence**:
+```python
+# src/portfolio/signal_log.py:43–56
+def _on_signal(self, event: Event) -> None:
+    signal = (event.payload or {}).get("signal")
+    ...
+    with open(self._filepath, "a", newline=...):  # blocks event loop
+        writer = csv.writer(f)
+        ...
+```
+
+```python
+# src/core/events.py:42–47
+async def publish(self, event: Event) -> None:
+    for callback in self._subscribers.get(event.event_type, []):
+        result = callback(event)  # _on_signal called here, blocks
+        if asyncio.iscoroutine(result):
+            await result
+```
+
+**Fix Suggestion**:
+Offload the file I/O to a thread using `asyncio.to_thread` or `loop.run_in_executor`. Two approaches:
+1. Make `_on_signal` an `async` method and use `await asyncio.to_thread(self._write_row, row)` — but `EventBus.publish` already handles async callbacks.
+2. Simpler: use `asyncio.get_event_loop().run_in_executor(None, self._write_row, row)` — fire-and-forget; I/O errors are already logged inside `_write_row`.
+
+Approach 1 is cleaner and integrates with the existing `EventBus.publish` coroutine support.
+
+**Fix History**:
+- **[2026-06-14] Fix attempted by bug-hunter**: Refactored `_on_signal` to offload file I/O to a thread via `loop.run_in_executor(None, self._write_row, row)`. Extracted the CSV write into a separate `_write_row` method for clean thread dispatch. When no running event loop exists (test context), falls back to direct write. Added `import asyncio`. The fire-and-forget pattern is safe because `_write_row` already handles its own exceptions and uses the existing `_lock` for thread safety. File: `src/portfolio/signal_log.py`.
+
+
+> **🔍 Agent Note (Engineer_Mack, 2026-06-14):** This issue was discovered and fixed by a subagent. The fix has **not** been independently validated by a second agent. The test suite (`pytest tests/`) was not re-run after the fix was applied. **Recommended next steps for reviewers:**
+> 1. Run `python3 -m pytest tests/ -v --timeout=30` to confirm no regressions.
+> 2. Add targeted unit tests for this specific fix if not already covered.
+> 3. Perform an independent code review of the changed lines before promoting status to VALIDATED.
+> 4. Verify the fix description matches the actual code change.

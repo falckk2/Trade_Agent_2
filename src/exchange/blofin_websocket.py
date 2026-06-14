@@ -104,6 +104,21 @@ class BloFinWebSocket:
                     logger.warning("WebSocket closed/error, reconnecting...")
                     await self._reconnect()
                     last_ping = time.monotonic()
+                    continue
+
+                # ISSUE-044 fix: after a successful receive, check if a ping
+                # is overdue. A message arriving just before the receive timeout
+                # used to cause the next loop iteration to skip the ping (since
+                # elapsed time was just under the threshold), then block for
+                # another full receive timeout — reaching ~2× the ping interval
+                # and risking a server disconnect. Sending here guarantees the
+                # maximum gap is _PING_INTERVAL + receive_latency (well under
+                # the server's ~30 s idle deadline).
+                now = time.monotonic()
+                if now - last_ping >= self._PING_INTERVAL:
+                    if self._ws and not self._ws.closed:
+                        await self._ws.send_json({"op": "ping"})
+                    last_ping = now
             except asyncio.TimeoutError:
                 # Quiet channel — loop back around; the ping check at the top
                 # of the loop sends the heartbeat.

@@ -413,9 +413,11 @@ class BloFinExchange(IExchange):
             if not position_id:
                 logger.warning(
                     "get_positions: 'positionId' missing from response item for %s "
-                    "— available keys: %s. Position flip detection will not work correctly.",
+                    "— available keys: %s. Position skipped (empty IDs break "
+                    "PortfolioManager flip/close detection — ISSUE-045).",
                     inst_id, list(item.keys()),
                 )
+                continue
             positions.append(
                 Position(
                     id=position_id,
